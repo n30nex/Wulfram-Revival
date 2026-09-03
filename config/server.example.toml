@@ -1,0 +1,27 @@
+[server]
+environment = "staging"
+display_name = "[STAGING] Wulfram"
+motd = "Wulfram staging server"
+map_name = "your-map"
+map_rotation = ["your-map"]
+player_nametag = "STAGE"
+player_limit = 20
+state_directory = "runtime/state"
+log_directory = "runtime/logs"
+shutdown_timeout_seconds = 15.0
+
+[network]
+host = "0.0.0.0"
+server_ip = "auto"
+tcp_port = 2627
+udp_port = 2627
+
+[authentication]
+password_environment = "WULFRAM_STAGING_PASSWORD"
+admin_password_environment = "WULFRAM_STAGING_ADMIN_PASSWORD"
+
+[logging]
+debug_packets = false
+show_ascii = false
+debug_actions = false
+debug_action_packets = false

@@ -1,0 +1,17 @@
+build/
+runtime/
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.dll
+*.dylib
+.venv/
+.idea/
+.vscode/
+
+# User-supplied Wulfram data is intentionally never committed.
+server/wulfram_server/content/collision/*
+!server/wulfram_server/content/collision/.gitkeep
+server/wulfram_server/content/shared/data/maps/*
+!server/wulfram_server/content/shared/data/maps/.gitkeep

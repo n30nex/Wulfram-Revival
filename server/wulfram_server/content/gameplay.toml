@@ -1,0 +1,11 @@
+[physics]
+tick_milliseconds = 40
+network_hz = 30.0
+view_update_hz = 5.0
+max_catch_up_steps = 5
+metrics_interval_seconds = 5.0
+jump_velocity = 200.0
+jump_acceleration = 20.0
+jump_fuel_cost = 6000.0
+fuel_regeneration_per_second = 350.0
+resting_fuel_multiplier = 1.65

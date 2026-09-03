@@ -1,0 +1,120 @@
+# packets.toml
+
+# Default hover-probe calibration used by the authoritative server.
+jet_layout_profile = "w1-clearance"
+
+[tank]
+unit_type = 0
+team_id = 1 # this will change at runtime, just leaving it here for now
+default_pos = [100.0, 100.0, 100.0]
+default_rot = [0.0, 0.0, 0.0]
+
+[tank.stats]
+include_vitals = true
+weapon_id = 0
+health_mult_bits = 1
+energy_mult_bits = 1
+
+[behavior]
+weapons_units_count = 4
+weapon_slots_count = 13
+unit_count = 39
+vehicle_physics_count = 2
+active_vehicles_count = 3
+
+[behavior.header]
+spawn_related = 0
+timeout = 5.0
+gravity_force = 160.0
+max_pulse_charge = 0.5 # Recovered use: minimum normalized pulse strength.
+# Slots 4/5/9 are the flak minimum, flak maximum, and gun-turret range
+# globals consumed by the client range-ring renderers. The executable only
+# supplies the globals; these first-pass engagement distances are server policy.
+unk10 = [1.0, 1.0, 1.0, 1.0, 300.0, 1200.0, 1.0, 1.0, 1.0, 300.0]
+# Covers the full 5600x5600 Crossroads map diagonal. The client applies this
+# cutoff to every hostile candidate, including unqualified TAB/U searches.
+enemy_targeting_distance_limit = 10000.0
+
+# Wulfram 1.0-derived provisional combat tuning. The authoritative rules and
+# the Behavior packet consume the same profile; replace individual values as
+# matching Wulfram II evidence is recovered.
+[combat]
+friendly_fire = false
+construction_timeout_seconds = 5.0
+autocannon_damage = 10.0
+autocannon_fuel_cost = 80.0
+autocannon_refire_seconds = 0.08
+autocannon_range = 1000.0
+autocannon_autoaim_degrees = 20.0
+autocannon_base_scatter = 0.0
+autocannon_random_scatter = 1.0
+autocannon_scatter_factor = 0.02
+pulse_minimum_strength = 0.5
+pulse_regeneration_seconds = 10.0
+pulse_refire_seconds = 0.6
+pulse_launch_speed = 500.0
+pulse_fuel_cost = 3800.0
+pulse_direct_damage = 200.0
+pulse_splash_damage = 100.0
+pulse_minimum_radius = 10.0
+pulse_maximum_radius = 50.0
+pulse_force_radius = 45.0
+pulse_impulse = 150.0
+pulse_lifetime_seconds = 5.0
+pulse_gravity = 160.0
+# Gun client presentation defaults below are recovered from the type-30
+# initializer. Damage and refire come from reference/server_params.
+gun_turret_range = 300.0 # First-pass server policy; no client constant exists.
+gun_turret_damage = 1.0 # 10.0
+gun_turret_refire_seconds = 0.08
+gun_turret_autoaim_dot = 0.9
+gun_turret_base_ray_range = 150.0
+gun_turret_random_ray_range = 300.0
+gun_turret_scatter_factor = 0.08
+# Flak health (applied by EntityManager), shell speed, refire, damage, radii,
+# impulse, and fuses come from reference/server_params. Range, muzzle clearance,
+# and recoil response are explicit first-pass tuning pending playtest evidence.
+flak_turret_minimum_range = 250.0 # 300.0
+flak_turret_maximum_range = 700.0 # 1200.0
+flak_turret_muzzle_speed = 130.0
+flak_turret_refire_tank_seconds = 2.5 # 0.5
+flak_turret_refire_other_seconds = 0.75
+flak_turret_muzzle_offset = 8.5
+flak_turret_recoil_speed = 8.0
+flak_turret_recoil_spring = 40.0
+flak_turret_recoil_damping = 10.0
+flak_shell_direct_damage = 25.0 # 100.0
+flak_shell_splash_damage = 2.0 # 40.0
+flak_shell_minimum_radius = 10.0
+flak_shell_maximum_radius = 35.0
+flak_shell_force_radius = 40.5
+flak_shell_impulse = 90.0
+flak_shell_arm_seconds = 0.35
+flak_shell_max_fuse_seconds = 2.6
+flak_shell_miss_fuse_seconds = 0.06
+
+[behavior.unit_defaults]
+scale = 1.0
+max_health = 100
+regen_or_health_related = 100.0
+
+[behavior.vehicle_physics]
+speed = 20.0            # Default: 20.0
+scrape_sound_movement_threshold = 4.0 # Recovered default; 10.0 diagnostic was negative
+engine_torque = 700     # Default: 700
+suspension_stiffness = 550 # Default: 550
+starting_jet_strength = 0.8 # Diagnostic compromise; recovered Tank default: 0.8
+minimum_jet_strength = 0.05 # Recovered Tank default; Scout: 0.15
+jet_response_coefficient = 1.3 # Recovered Tank default; Scout: 1.1
+mass = 33000            # Default: Tank: 33000 Scout: 13000
+
+[behavior.active_vehicle_physics]
+turn_adjust = 4.5   # Default: 4.5
+move_adjust = 85.0  # Default: 85.0
+move_backward_adjust = 38.0 # Default: 38.0 (Scout only?)
+strafe_adjust = 69.7 # Default: Tank: 69.7 Scout: 72.0
+max_velocity = 80.0  # Default: Tank: 80.0 Scout: 85.0
+low_fuel_level = 2000.0 # Default: 2000.0
+max_altitude = 12.0  # Calibration test; recovered compiled Tank default: 3.25
+max_speed_height_pickup = 3.5 # Default: 3.5 (Scout only?)
+gravity_pct = 1.0   # Default: 1.0

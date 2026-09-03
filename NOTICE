@@ -1,0 +1,12 @@
+Wulfram 2 Physics Core
+Copyright (C) 2026 baffler
+
+This project is an independently written, reverse-engineered implementation
+intended to interoperate with Wulfram II clients. It is not affiliated with,
+endorsed by, or sponsored by the original Wulfram developers or rights holders.
+
+No original Wulfram executable, map, model, collision, texture, audio, or other
+game asset is distributed with this repository. Users are responsible for
+supplying any data they are legally entitled to use.
+
+"Wulfram" and related names may be trademarks of their respective owners.
