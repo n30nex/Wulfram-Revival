@@ -134,6 +134,7 @@ class ClientSession:
 
         # Gate flag for the global loop
         self.is_ready_for_updates: bool = False
+        self.world_announced: bool = False
         
         # UDP Linkage
         self.udp_addr: Optional[Tuple[str, int]] = None
@@ -1186,7 +1187,7 @@ def _send_carrying_info(
     actual_item_id = carrier.carried_cargo_item_id
     cargo_team_id = carrier.carried_cargo_team_id
     for recipient in server.sessions:
-        if not recipient.is_logged_in:
+        if not recipient.is_logged_in or not recipient.is_ready_for_updates:
             continue
         target = recipient.udp_context
         if target is None:
@@ -1617,18 +1618,18 @@ def on_hello(
         # Client Echoed Key (Sub 1) - This comes from send_hello2
         client_key = reader.read_string()
         
-        print(f">>> Client Echoed Key: {client_key}")
+        print(">>> Client echoed a session key")
 
         # CASE A: We already have a session (TCP or already linked UDP)
         if ctx.session:
             if client_key == ctx.session.session_key:
-                print(f">>> [{type(ctx).__name__}] Key Verified: {client_key}")
+                print(f">>> [{type(ctx).__name__}] Session key verified")
                 ctx.session.key_echoed_event.set()
                 ctx.send(IdentifiedUdpPacket())
 
         # CASE B: Sessionless UDP Context (This is the new logic)
         elif isinstance(ctx, UdpContext) and ctx.session is None:
-            print(f">>> [UDP] Received Key '{client_key}' from unknown {ctx.addr}. Searching...")
+            print(f">>> [UDP] Received session key from unlinked {ctx.addr}. Searching...")
             
             # Find the TCP session that generated this key
             found_session = None
@@ -1660,7 +1661,7 @@ def on_hello(
                 # 3. Reply immediately on UDP
                 ctx.send(IdentifiedUdpPacket())
             else:
-                print(f"[WARN] UDP Key '{client_key}' matched no active sessions.")
+                print("[WARN] UDP session key matched no active clients.")
 
     # HELLO subcmd 2: Not quite sure what this means
     # possibly just confirming the UDP link was verified?
@@ -1699,6 +1700,8 @@ def on_bps_request(ctx: TcpContext, payload: bytes):
 @dispatcher.route(0x39)
 def on_want_updates(ctx: TcpContext, payload: bytes):
     log_packet("TCP-RECV", payload)
+    if not ctx.session.is_logged_in or not ctx.session.world_announced:
+        return
     print(">>> Client is ready for updates (0x39)")
     ctx.server.trace.state("WANT_UPDATES", player=ctx.session.player_id)
     ctx.send(CommMessagePacket(
@@ -2426,6 +2429,9 @@ def send_system_message(ctx: UdpContext | TcpContext, message: str, receipient_i
                 message=message
             ))
     
+WORLD_ENTITY_OPCODES = frozenset((0x0D, 0x0E, 0x0F, 0x15, 0x18, 0x1D, 0x1E, 0x29, 0x38))
+
+
 def broadcast(server: WulframServerContext, packet_data: bytes | Packet, exclude_session: ClientSession | None = None):
     """
     Generic broadcaster. Serializes a packet once and sends it to all logged-in players.
@@ -2442,6 +2448,10 @@ def broadcast(server: WulframServerContext, packet_data: bytes | Packet, exclude
     for session in server.sessions:
         # Skip not logged in or excluded sessions
         if not session.is_logged_in or session == exclude_session:
+            continue
+        # WORLD_STATS resets the original client's entity registry. Only its
+        # subsequent WANT_UPDATES proves that the new world finished loading.
+        if payload and payload[0] in WORLD_ENTITY_OPCODES and not session.is_ready_for_updates:
             continue
             
         try:
@@ -2541,26 +2551,9 @@ def load_map_state(
 
     if notification_context is not None:
         send_system_message(notification_context, message)
-    sent_snapshot = False
-    for session in server.sessions:
-        if not session.is_logged_in or session.udp_context is None:
-            continue
-        send = getattr(session.udp_context, "send", None)
-        if not callable(send):
-            continue
-        send(server.entities.get_snapshot_packet(
-            sequence_num=get_ticks(),
-            health=1.0,
-            energy=1.0,
-            viewer_team=session.team,
-        ))
-        sent_snapshot = True
-    if not sent_snapshot:
-        broadcast(server, server.entities.get_snapshot_packet(
-            sequence_num=get_ticks(),
-            health=1.0,
-            energy=1.0,
-        ))
+    # Loading server content must not send an unsolicited VIEW_UPDATE. A UDP
+    # snapshot can overtake WORLD_STATS and reach an uninitialized client world.
+    # on_want_updates sends the first snapshot after the client's load completes.
     return True
 
 # -------------------------------------------------------------------------
@@ -2779,4 +2772,5 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
         ctx.server.land.load(map_land_path(ctx.server, ctx.server.current_map_name))
         ctx.server.first_map_load = True
 
+    ctx.session.world_announced = True
     start_ping_loop(ctx)

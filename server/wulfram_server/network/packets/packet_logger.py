@@ -91,6 +91,12 @@ class PacketLogger:
 
         print(f"[{direction}] {label}{name:<14} (0x{pkt_type:02X}) | Len={length:<3}{addr_str}")
 
+        # Login bodies contain passwords; HELLO bodies can contain UDP session
+        # keys. Never disclose either through hex dumps or ASCII debugging.
+        if pkt_type in (0x13, 0x21):
+            print("       Body=[authentication data redacted]")
+            return
+
         # Hex dump: optionally include the TCP 2-byte length prefix
         if include_tcp_len_prefix:
             tcp_len = len(payload) + 2

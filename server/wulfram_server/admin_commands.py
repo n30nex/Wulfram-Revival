@@ -469,6 +469,9 @@ def _complete_map_change(server: Any, transition: MapChangeTransition) -> None:
         session.ground_dock_reference_pos = None
         session.ground_dock_reference_rot = None
         session.ground_dock_last_physics_tick = 0
+        if not bool(getattr(session, "is_bot", False)):
+            session.is_ready_for_updates = False
+            session.world_announced = True
 
     server.land = transition.replacement_land
     server.current_map_name = map_name
@@ -478,18 +481,8 @@ def _complete_map_change(server: Any, transition: MapChangeTransition) -> None:
     server.map_change_transition = None
     server.match_state = MatchState()
     app.broadcast(server, WorldStatsPacket(map_name=map_name))
-    for session in server.sessions:
-        if not session.is_logged_in or session.udp_context is None:
-            continue
-        send = getattr(session.udp_context, "send", None)
-        if not callable(send):
-            continue
-        send(server.entities.get_snapshot_packet(
-            sequence_num=app.get_ticks(),
-            health=1.0,
-            energy=1.0,
-            viewer_team=session.team,
-        ))
+    # The client resets its entity registry on WORLD_STATS. Wait for its next
+    # WANT_UPDATES before sending either the snapshot or ordinary world updates.
     requester = (
         getattr(request.context.session, "name", "unknown")
         if request.context is not None

@@ -94,6 +94,8 @@ class BotHandshakeTests(unittest.TestCase):
             login.write_byte(3)
             login.write_string("Human Player")
             login.write_string("player")
+            # An early/malicious readiness request cannot bypass world loading.
+            transport.send_payload(b"\x39\x01")
             transport.send_payload(b"\x21" + login.get_bytes())
             self.assertEqual(udp_client.recv(65535), b"\x13\x03")
             root = PacketWriter()
@@ -107,13 +109,14 @@ class BotHandshakeTests(unittest.TestCase):
             packets = []
             while not packets or packets[-1][0] != 0x16:
                 packets.append(transport.recv_payload())
+            self.assertNotIn(0x0F, [payload[0] for payload in packets])
             roster = [payload for payload in packets if payload[0] == 0x1A]
             self.assertEqual(len(roster), 5)
             for bot in server.bots.bots:
                 self.assertTrue(any(bot.name.encode() in payload for payload in roster))
                 self.assertIsNone(bot.udp_context)
             self.assertTrue(session.is_logged_in)
-            transport.send_payload(b"\x39")
+            transport.send_payload(b"\x39\x01")
             self.assertTrue(hooks.world_synced.wait(3))
             self.assertTrue(session.is_ready_for_updates)
         finally:
