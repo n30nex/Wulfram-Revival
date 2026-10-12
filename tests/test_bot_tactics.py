@@ -66,6 +66,7 @@ class TacticsTests(unittest.TestCase):
         server, _ = self.arena(1)
         bot = server.bots.bots[0]
         bot.next_plan_at = 200
+        bot.progress_check_at = 101
         bot.goal = (4500.,2500.)
         server.bots.navigation.waypoint = Mock(return_value=(510.,2500.))
         server.bots._decide(bot,100)
