@@ -1633,6 +1633,10 @@ def on_hello(
             # Find the TCP session that generated this key
             found_session = None
             for s in ctx.server.sessions:
+                # CPU players share the roster but never own network keys or
+                # handshake events. Only a TCP client can claim this UDP peer.
+                if not isinstance(s, ClientSession):
+                    continue
                 if s.session_key == client_key:
                     found_session = s
                     break
