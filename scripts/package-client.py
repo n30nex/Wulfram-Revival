@@ -3,6 +3,7 @@ from pathlib import Path
 import argparse
 import hashlib
 import json
+import os
 import re
 import runpy
 import shutil
@@ -56,9 +57,13 @@ def main():
         (client/name).write_bytes(text.replace('\r\n','\n').replace('\n','\r\n').encode('ascii'))
     shutil.copy2(args.helper,client/'wulfram-display.exe')
     subprocess.run([str(client/'wulfram-display.exe'),'--self-test'],check=True)
+    powershell=shutil.which('pwsh') or shutil.which('powershell.exe')
+    if powershell is None: raise RuntimeError('PowerShell is required to prepare the client')
+    environment=dict(os.environ)
+    environment.pop('PSModulePath',None)  # Do not mix PowerShell 7 and Windows PowerShell module paths.
     for script,extra in (('prepare-windows-client.ps1',['-CompatibilityDll',str(client/'w2reg.dll')]),
                          ('prepare-controls.ps1',[])):
-        subprocess.run(['powershell.exe','-NoProfile','-File',str(ROOT/'scripts'/script),'-ClientDir',str(client),*extra],check=True)
+        subprocess.run([powershell,'-NoProfile','-File',str(ROOT/'scripts'/script),'-ClientDir',str(client),*extra],check=True,env=environment)
     runpy.run_path(str(ROOT/'scripts/build-frontier-map.py'))['generate'](client/'data/maps/frontier')
     graphics=client/'canadaverse/graphics'
     graphics.mkdir(parents=True)
