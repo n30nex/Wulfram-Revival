@@ -548,6 +548,9 @@ int wmain(int argc, wchar_t **argv) {
     int height=physical_height<720 ? 480 : 540;
     int width=(int)((physical_width*height+physical_height/2)/physical_height);
     if (width<640) { width=640; height=(int)((physical_height*640+physical_width/2)/physical_width); }
+    /* Retail RGB readback assumes DWORD-aligned rows; odd canvas widths can
+       corrupt adjacent allocations when the 3D framebuffer is copied. */
+    width=(width+3)&~3;
     double ui_scale=(double)physical_height/height;
     const wchar_t *server=argc>=5 ? argv[4] : argc==3 ? argv[2] : L"wulfram.canadaverse.org";
     if (!*server || wcslen(server)>253 || wcsspn(server,L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")!=wcslen(server)) return 2;

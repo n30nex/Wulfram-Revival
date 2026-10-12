@@ -17,6 +17,7 @@ from wulfram_server import application as app
 from wulfram_server.core.config import Config
 from wulfram_server.directory_query import TCP_QUERY_MAGIC, try_tcp_query
 from wulfram_server.hooks import ServerHooks
+from wulfram_server.hooks import ProductionHooks
 from wulfram_server.network.limits import RateLimit
 from wulfram_server.network.packets.packet_config import PacketConfig
 from wulfram_server.network.streams import PacketDecodeError, PacketWriter
@@ -175,6 +176,17 @@ class NetworkBoundaryTests(unittest.TestCase):
             self.server._run_game_loop()
         self.assertTrue(self.server.stop_event.is_set())
         self.assertIsNotNone(self.server.fatal_error)
+
+    def test_admin_credential_cannot_authorize_an_internet_peer(self):
+        hooks = ProductionHooks(Config(), {"WULFRAM_SERVER_PASSWORD":"join", "WULFRAM_SERVER_ADMIN_PASSWORD":"admin"})
+        for address, password, accepted, admin in (
+            ("8.8.8.8", "admin", False, False), ("8.8.8.8", "join", True, False),
+            ("192.168.0.10", "admin", True, True), ("127.0.0.1", "admin", True, True)):
+            session = self.session((address, 30000))
+            session.supplied_password = password
+            self.assertEqual(hooks.authenticate(session), accepted)
+            self.assertEqual(session.is_admin, admin)
+            self.assertEqual(session.supplied_password, "")
 
     def test_team_chat_stays_on_the_senders_team(self):
         for player_id, team in enumerate((1, 1, 2), 1):

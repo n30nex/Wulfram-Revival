@@ -221,6 +221,7 @@ def logical_size(width, height):
     logical_width = (width*logical_height+height//2)//height
     if logical_width < 640:
         logical_width,logical_height = 640,(height*640+width//2)//width
+    logical_width = (logical_width+3)&~3
     return [logical_width,logical_height]
 
 
@@ -287,12 +288,9 @@ def start(args, root, client):
     if not re.fullmatch(r'[A-Za-z0-9.-]{1,253}',args.server):
         raise ValueError('Invalid server hostname.')
     logical = logical_size(width,height)
-    # This per-executable profile overrides the archive's compatibility baseline.
-    (client/'DDrawCompat-wulfram2.ini').write_text(
-        f'ResolutionScale = display(1)\nDisplayAspectRatio = app\nDisplayResolution = desktop\n'
-        f'FullscreenMode = borderless\nDpiAwareness = permonitorv2\n'
-        f'SupportedResolutions = native, 640x480, 800x600, 1024x768, {logical[0]}x{logical[1]}\n'
-        'TextureFilter = af16x\nAntialiasing = msaa4x(0)\nSpriteDetection = point\nSpriteFilter = point\n',encoding='ascii')
+    # Exercise the shipped profile. Rewriting it here would hide a broken
+    # package or a missing display mode in the real launcher's configuration.
+    profile_hash = digest(client/'DDrawCompat-wulfram2.ini')
     extra = ['--lab-view']
     if args.scene != 'login':
         password = os.environ.get('WULFRAM_LAB_PASSWORD','')
@@ -300,7 +298,6 @@ def start(args, root, client):
             raise ValueError('Set WULFRAM_LAB_PASSWORD for the isolated test account.')
         extra = ['--lab']
         if args.scene == 'map': extra.append('red')
-    (client/'_override_args').unlink(missing_ok=True)
     run = root/'runs'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     run.mkdir(parents=True)
     launcher = run/'wulfram-display.exe'
@@ -317,6 +314,7 @@ def start(args, root, client):
         record = {'pid':process.pid,'created':process.created,'client':str(client),'output':[width,height],
                   'logical':logical,'scene':args.scene,'server':args.server,
                   'port':args.port,
+                  'initial_profile_sha256':profile_hash,
                   'launcher':str(launcher),'launcher_sha256':digest(launcher),'retail_sha256':RETAIL}
         mailbox = re.search(r'CLIENT_LAB_MAILBOX=(\d+)',result.stdout)
         record['mailbox'] = int(mailbox[1]) if mailbox else None
@@ -394,6 +392,11 @@ def main():
         if args.action == 'capture':
             if not re.fullmatch(r'[a-z0-9-]{1,60}',args.label): raise ValueError('Use a simple capture label.')
             before = max((p.stat().st_mtime_ns for p in client.glob('shot*.bmp')),default=0)
+            process.menu_command(record.get('mailbox'),capture=True)
+            # Retail F12 reads the previous presented frame. Capture a second
+            # frame so a just-completed menu transition cannot masquerade as
+            # a screenshot of the requested world/page.
+            time.sleep(.05)
             process.menu_command(record.get('mailbox'),capture=True)
             latest = max(client.glob('shot*.bmp'),key=lambda p:p.stat().st_mtime,default=None)
             if latest is None or latest.stat().st_mtime_ns <= before:

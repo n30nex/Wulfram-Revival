@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import hmac
+import ipaddress
 import os
 import time
 from typing import Any
@@ -147,6 +148,12 @@ class ProductionHooks(ServerHooks):
             supplied_bytes,
             self._admin_password.encode("utf-8"),
         )
+        # The retail transport is not encrypted. Remote players use a public
+        # join code; administration is restricted to loopback/private LAN peers.
+        peer = ipaddress.ip_address(session.address[0])
+        admin_match = admin_match and (peer.is_loopback or any(peer in network for network in (
+            ipaddress.ip_network("10.0.0.0/8"), ipaddress.ip_network("172.16.0.0/12"),
+            ipaddress.ip_network("192.168.0.0/16"))))
         session.is_admin = admin_match
         session.supplied_password = ""
         return player_match or admin_match

@@ -1663,7 +1663,8 @@ def unknown_packet(ctx, payload: bytes):
     if opcode in [0x09, 0x0A, 0x0B, 0x0C, 0x10, 0x40, 0x49]:
             return
     
-    print(f"[?] Unknown opcode 0x{opcode:02X} (len={len(payload)})")
+    if ctx.server.cfg.debug.debug_packets:
+        print(f"[?] Unknown opcode 0x{opcode:02X} (len={len(payload)})")
 
 # Create dispatcher early here
 dispatcher = PacketDispatcher(on_unknown=unknown_packet)
@@ -1693,7 +1694,6 @@ def on_hello(
         # Client sent Version (Sub 0) - This comes from start_udp_send_hello_root
         # payload usually contains the version int (20105)
         version = reader.read_int32()
-        print(f">>> Client HELLO(version) = {version} ~ 0x{version:08X}")
         #ctx.send(HelloPacket.create_version())
 
     # HELLO subcmd 1: UDP config request/ack
@@ -1748,10 +1748,10 @@ def on_hello(
     # possibly just confirming the UDP link was verified?
     elif subcmd == 0x02:
         # This comes from send_hello3
-        print(">>> Client HELLO(SUBCMD: 2)")
+        pass
 
     else:
-        print(f">>> Client HELLO unknown subcmd=0x{subcmd:02X}")
+        raise PacketDecodeError("unknown HELLO subcommand")
 
 
 @dispatcher.route(0x21)
@@ -1880,7 +1880,8 @@ def on_debug_string(ctx: UdpContext, reader: PacketReader):
     string_length = reader.read_byte()
     raw_message = reader.read_bytes(string_length)
     msg = raw_message.decode('ascii', errors='ignore').strip('\x00')
-    print(f"    > UDP DEBUG MSG: '{msg}'")
+    if ctx.server.cfg.debug.debug_packets:
+        print(f"    > UDP DEBUG MSG: {msg!r}")
 
 
 @dispatcher.datagram_route(0x02)
