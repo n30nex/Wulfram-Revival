@@ -28,6 +28,11 @@ class PacketWriter:
         self._flush_bits()
         return bytes(self._buffer)
 
+    @property
+    def position_bits(self) -> int:
+        """Length before byte padding, for joining independently encoded records."""
+        return len(self._buffer) * 8 + self._bit_index
+
     # ------------------------------------------------------------------
     # CORE BIT LOGIC
     # ------------------------------------------------------------------
