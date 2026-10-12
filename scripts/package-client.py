@@ -24,6 +24,7 @@ def main():
     parser.add_argument('--helper',type=Path,required=True)
     parser.add_argument('--helper-sha256',required=True)
     parser.add_argument('--actions-run',type=int,required=True)
+    parser.add_argument('--helper-revision',required=True,help='exact source revision of that Actions build')
     parser.add_argument('--version',required=True)
     parser.add_argument('--output',type=Path,required=True,help='new directory for the extracted package and ZIP')
     args=parser.parse_args()
@@ -32,6 +33,11 @@ def main():
     if digest(args.baseline)!=BASELINE or digest(args.helper)!=args.helper_sha256.lower():
         raise ValueError('Baseline or exact Actions helper digest does not match')
     revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+    if not re.fullmatch('[a-f0-9]{40}',args.helper_revision):
+        raise ValueError('Supply the full Actions source revision')
+    if subprocess.check_output(['git','diff',args.helper_revision,'HEAD','--',
+                                'client/windows/wulfram-display.c','client/windows/CMakeLists.txt'],cwd=ROOT,text=True):
+        raise ValueError('The display helper source changed since its Actions build')
     if subprocess.check_output(['git','status','--porcelain'],cwd=ROOT,text=True).strip():
         raise ValueError('Commit the source before packaging')
     output=args.output.resolve()
@@ -63,6 +69,7 @@ def main():
     files={str(path.relative_to(client)).replace('\\','/'):digest(path)
            for path in sorted(client.rglob('*')) if path.is_file()}
     manifest={'schema':1,'version':args.version,'source_revision':revision,'actions_run':args.actions_run,
+              'helper_build_revision':args.helper_revision,
               'baseline_sha256':BASELINE,'helper_sha256':args.helper_sha256.lower(),'files':files}
     (client/'package-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
     archive_path=output/f'Wulfram-Canadaverse-Windows-{args.version}-{revision[:7]}.zip'

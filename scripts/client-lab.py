@@ -34,8 +34,8 @@ def save(path, value):
     Path(path).write_text(json.dumps(value, indent=2) + '\n', encoding='utf-8')
 
 
-def prepare(root, archive):
-    if root.exists() or digest(archive) != ARCHIVE:
+def prepare(root, archive, expected=ARCHIVE):
+    if not re.fullmatch('[a-fA-F0-9]{64}',expected) or root.exists() or digest(archive) != expected.lower():
         raise ValueError('Choose a new lab directory and the verified Canadaverse archive.')
     with zipfile.ZipFile(archive) as source:
         for name in source.namelist():
@@ -45,7 +45,7 @@ def prepare(root, archive):
     client = root / 'Wulfram-Canadaverse'
     if digest(client / 'wulfram2.exe') != RETAIL:
         raise ValueError('Unexpected retail executable.')
-    save(root / 'lab.json', {'client': str(client), 'archive_sha256': ARCHIVE})
+    save(root / 'lab.json', {'client': str(client), 'archive_sha256': expected.lower()})
 
 
 def lab_client(root):
@@ -315,6 +315,7 @@ def main():
     parser.add_argument('--root',type=Path,required=True)
     sub = parser.add_subparsers(dest='action',required=True)
     prep = sub.add_parser('prepare'); prep.add_argument('--archive',type=Path,required=True)
+    prep.add_argument('--sha256',default=ARCHIVE,help='verified checksum of the exact release archive')
     launch = sub.add_parser('start'); launch.add_argument('--launcher',type=Path,required=True)
     launch.add_argument('--resolution',default='1920x1080'); launch.add_argument('--server',default='wulfram.canadaverse.org')
     launch.add_argument('--port',type=int,choices=range(1,65536),default=2627,metavar='1..65535')
@@ -327,7 +328,7 @@ def main():
             command.add_argument('--expect-scene',choices=('teams','map','world'))
             command.add_argument('--expect-team',type=int,choices=(1,2))
     args = parser.parse_args(); root=args.root.resolve()
-    if args.action == 'prepare': prepare(root,args.archive); return
+    if args.action == 'prepare': prepare(root,args.archive,args.sha256); return
     client = lab_client(root)
     if args.action == 'start': start(args,root,client); return
     run = args.run.resolve()
