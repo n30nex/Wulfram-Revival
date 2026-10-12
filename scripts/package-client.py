@@ -45,7 +45,7 @@ def main():
             if Path(entry.filename).name in ('Uninstall.exe','bwau.exe','package-manifest.json'):
                 continue
             archive.extract(entry,output)
-    for name in ('Play Canadaverse.cmd','Settings.cmd','START HERE.txt'):
+    for name in ('Play Canadaverse.cmd','Settings.cmd','START HERE.txt','DDrawCompat-License.txt'):
         text=(ROOT/'client/windows'/name).read_text()
         (client/name).write_bytes(text.replace('\r\n','\n').replace('\n','\r\n').encode('ascii'))
     shutil.copy2(args.helper,client/'wulfram-display.exe')
