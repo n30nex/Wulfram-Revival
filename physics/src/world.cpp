@@ -2647,14 +2647,14 @@ bool World::ApplyLinearImpulse(EntityId id, const Vec3f& impulse) noexcept {
 
 bool World::ConsumeFuel(EntityId id, float amount) noexcept {
     const auto found=entities_.find(id);
-    if(found==entities_.end()||amount<0.0F||found->second->fuel<amount)return false;
+    if(found==entities_.end()||!std::isfinite(amount)||amount<0.0F||found->second->fuel<amount)return false;
     found->second->fuel-=amount;
     return true;
 }
 
 bool World::AddFuel(EntityId id, float amount) noexcept {
     const auto found=entities_.find(id);
-    if(found==entities_.end()||amount<=0.0F)return false;
+    if(found==entities_.end()||!std::isfinite(amount)||amount<=0.0F)return false;
     Entity& entity=*found->second;
     const auto& vehicle=entity.controllerType==ControllerType::Scout?config_.scout:config_.tank;
     const float previous=entity.fuel;

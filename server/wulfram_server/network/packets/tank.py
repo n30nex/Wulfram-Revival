@@ -4,7 +4,7 @@ from wulfram_server.network.streams import PacketWriter
 from .packet_config import TankPacketConfig
 from wulfram_server.core.config import get_ticks
 from wulfram_server.network.packets.base import Packet 
-from wulfram_server.network.translation_config import get_config_by_index
+from .weapon_state import write_local_weapon_state
 
 @dataclass
 class TankPacket(Packet):
@@ -20,6 +20,7 @@ class TankPacket(Packet):
     weapon_table_id: int = 0
     weapon_ready_mask: int = 0
     pulse_charge: float = 1.0
+    repair_charge: float = 1.0
 
     def serialize(self) -> bytes:
         # 1. Resolve Defaults
@@ -40,15 +41,8 @@ class TankPacket(Packet):
             pkt.write_bits(self.weapon_table_id, 5)
             pkt.write_bits(stats.health_mult_bits, 10)
             pkt.write_bits(stats.energy_mult_bits, 10)
-            if self.weapon_table_id == 0:
-                # Behavior enables ready/active channels for Tank slots 0 and
-                # 4, followed by the configured pulse-charge scalar.
-                pkt.write_bits(self.weapon_ready_mask & 0b11, 2)
-                pulse_config = get_config_by_index(13)
-                _, pulse_value, pulse_bits = pulse_config.compress(self.pulse_charge)
-                pkt.write_bits(pulse_value, pulse_bits)
-            # Scout table 1 has no enabled slots in BehaviorPacket, so the
-            # retail decoder consumes no firing mask or repair-charge scalar.
+            write_local_weapon_state(pkt, self.weapon_table_id, self.weapon_ready_mask,
+                                     self.pulse_charge, self.repair_charge)
 
         pkt.write_int32(_unit_type)
         pkt.write_int32(self.net_id)

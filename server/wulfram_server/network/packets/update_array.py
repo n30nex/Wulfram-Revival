@@ -2,6 +2,7 @@ from wulfram_server.network.streams import PacketWriter
 from wulfram_server.network.translation_config import *
 from wulfram_server.core.config import get_ticks
 from wulfram_server.core.entity import GameEntity, UpdateMask
+from .weapon_state import write_ready_mask, write_local_weapon_state
 
 class EntitySerializer:
     """
@@ -27,7 +28,7 @@ class EntitySerializer:
             mask |= UpdateMask.DEFINITION
         # Only entity types with an enabled Behavior weapon table may carry
         # the compact inventory state. Tank uses table 0; Gun Turret uses 3.
-        if entity.unit_type not in (0, 30):
+        if entity.unit_type not in (0, 1, 30):
             mask &= ~UpdateMask.WEAPON
             
         # 2. Write Header (Standard for every entity)
@@ -98,14 +99,7 @@ class EntitySerializer:
             # Net_Read_Weapon_Inventory first selects the compact Behavior
             # table, then consumes only the bit groups enabled by that table.
             self.writer.write_bits(entity.weapon_table_id, GLOBAL_CONFIGS[1]['head'])
-            if entity.weapon_table_id == 0:
-                # Tank Behavior enables the firing-state channel for slots 0
-                # and 4, in slot order.
-                self.writer.write_bits(entity.weapon_ready_mask & 0b11, 2)
-            elif entity.weapon_table_id == 3:
-                # Gun Turret enables the ready/firing-state channel only for
-                # slot zero.
-                self.writer.write_bits(entity.weapon_ready_mask & 0b1, 1)
+            write_ready_mask(self.writer, entity.weapon_table_id, entity.weapon_ready_mask)
 
         # Bit 7: Energy
         if mask & UpdateMask.ENERGY:
@@ -179,6 +173,7 @@ class UpdateArrayPacket:
         weapon_table_id: int = 0,
         weapon_ready_mask: int = 0,
         pulse_charge: float = 1.0,
+        repair_charge: float = 1.0,
     ):
         """
         Sets the HUD stats for the player receiving this packet.
@@ -190,6 +185,7 @@ class UpdateArrayPacket:
             weapon_table_id,
             weapon_ready_mask,
             pulse_charge,
+            repair_charge,
         )
 
     def add_entity(self, entity: GameEntity, force_spawn=False, forced_mask: int | None = None):
@@ -209,15 +205,8 @@ class UpdateArrayPacket:
             
             self.writer.write_bits(h_val, h_bits)
             self.writer.write_bits(e_val, e_bits)
-            # Tank table 0 has two firing-state bits (autocannon, pulse) and
-            # an enabled pulse slot, which makes the trailing charge required.
-            if self.local_stats[2] == 0:
-                self.writer.write_bits(self.local_stats[3] & 0b11, 2)
-                pulse_config = get_config_by_index(13)
-                _, pulse_val, pulse_bits = pulse_config.compress(self.local_stats[4])
-                self.writer.write_bits(pulse_val, pulse_bits)
-            # Scout table 1 has no enabled Behavior slots and therefore no
-            # firing-mask or repair-charge bits before the entity count.
+            write_local_weapon_state(self.writer, self.local_stats[2], self.local_stats[3],
+                                     self.local_stats[4], self.local_stats[5])
         else:
             # If 0, client skips Parse_SpawnVitalStats
             self.writer.write_bool(False) 

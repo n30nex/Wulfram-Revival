@@ -30,6 +30,31 @@ class RetailBits:
 
 
 class ScoutWireTests(unittest.TestCase):
+    def test_tank_piercer_and_disabled_table_have_exact_retail_lengths(self):
+        cfg = PacketConfig.load(str(ROOT / "server/wulfram_server/content/packets.toml"))
+        wire = TankPacket(net_id=77, sequence_id=123, tank_cfg=cfg.tank,
+                          unit_type=0, team_id=1, weapon_ready_mask=5).serialize()
+        bits = RetailBits(wire[1:])
+        self.assertEqual(bits.take(32), 123)
+        self.assertEqual(bits.take(1), 1)
+        self.assertEqual(bits.take(5), 0)
+        bits.take(10); bits.take(10)
+        self.assertEqual(bits.take(3), 5)  # Slots 0, 4 and 5, in slot order.
+        self.assertEqual(bits.take(8), 1)  # Pulse charge only.
+        self.assertEqual(bits.take(32), 0)
+        self.assertEqual(bits.take(32), 77)
+        bits.take(8)
+        for _ in range(6): bits.take(32)
+        bits.finish()
+        packet = UpdateArrayPacket(sequence_id=1)
+        packet.set_local_stats(1, 1, weapon_table_id=2)
+        bits = RetailBits(packet.get_bytes())
+        bits.take(32); bits.take(1)
+        self.assertEqual(bits.take(5), 2)
+        bits.take(10); bits.take(10)
+        self.assertEqual(bits.take(8), 0)  # Disabled table has no hidden tail.
+        bits.finish()
+
     def test_scout_spawn_and_snapshot_match_announced_weapon_flags(self):
         cfg = PacketConfig.load(str(ROOT / "server/wulfram_server/content/packets.toml"))
         behavior = BehaviorPacket(cfg.behavior, cfg.combat, cfg.jet_layout_profile).serialize()
@@ -37,15 +62,15 @@ class ScoutWireTests(unittest.TestCase):
         # 45-byte records per table. Table 1 is Scout: all five flags are zero.
         for slot in range(13):
             offset = 96 + (13 + slot) * 45
-            self.assertEqual(behavior[offset:offset + 5], bytes(5))
+            self.assertEqual(behavior[offset:offset + 5], bytes((1, 0, 0, 1, 0)) if slot in (0, 1) else bytes(5))
 
         def read_scout_vitals(bits):
             self.assertEqual(bits.take(1), 1)
             self.assertEqual(bits.take(5), 1)
             self.assertEqual(bits.take(10), 1)  # Full health.
             self.assertEqual(bits.take(10), 1)  # Full fuel.
-            # The executable consumes zero active bits and no optional scalars
-            # for the all-disabled table above; the next field starts HERE.
+            self.assertEqual(bits.take(2), 0)  # Machine gun and repair beam flags.
+            self.assertEqual(bits.take(8), 1)  # Full repair charge, enabled by slot 1.
 
         spawn = TankPacket(net_id=0x12345678, sequence_id=123, tank_cfg=cfg.tank,
                            unit_type=1, team_id=2, weapon_table_id=1,

@@ -11,6 +11,7 @@ from .jet_layout_profiles import (
     get_jet_layout_profile,
 )
 from .packet_config import BehaviorConfig, CombatConfig
+from .weapon_state import READY_SLOTS
 
 
 def _write_jet_shape_block(
@@ -95,9 +96,12 @@ class BehaviorPacket(Packet):
         for unit_index in range(cfg.weapons_units_count):
             for slot_index in range(cfg.weapon_slots_count):
                 is_tank_autocannon = unit_index == 0 and slot_index == 0
+                is_scout_gun = unit_index == 1 and slot_index == 0
+                is_repair = unit_index == 1 and slot_index == 1
                 is_tank_pulse = unit_index == 0 and slot_index == 4
+                is_piercer = unit_index == 0 and slot_index == 5
                 is_gun_turret = unit_index == 3 and slot_index == 0
-                enabled = is_tank_autocannon or is_tank_pulse or is_gun_turret
+                enabled = slot_index in READY_SLOTS[unit_index]
                 # 5 applicability channel bool bytes
                 pkt.write_byte(1 if enabled else 0)
                 pkt.write_byte(0)
@@ -111,6 +115,8 @@ class BehaviorPacket(Packet):
                 pkt.write_fixed1616(
                     math.cos(math.radians(combat.autocannon_autoaim_degrees))
                     if is_tank_autocannon else
+                    math.cos(math.radians(combat.scout_machinegun_autoaim_degrees)) if is_scout_gun else
+                    math.cos(math.radians(12.0)) if is_repair else
                     combat.gun_turret_autoaim_dot if is_gun_turret else
                     1.0
                 )
@@ -125,6 +131,10 @@ class BehaviorPacket(Packet):
                 elif is_tank_pulse:
                     pkt.write_int32(int(round(combat.pulse_refire_seconds * 1000.0)))
                     pkt.write_int32(0)
+                elif is_scout_gun or is_piercer or is_repair:
+                    interval = combat.scout_machinegun_refire_seconds if is_scout_gun else combat.piercer_refire_seconds if is_piercer else 0.04
+                    pkt.write_int32(int(round(interval * 1000)))
+                    pkt.write_int32(int(round(interval * 1000)) if is_scout_gun else 0)
                 elif is_gun_turret:
                     cooldown_ms = int(round(combat.gun_turret_refire_seconds * 1000.0))
                     pkt.write_int32(cooldown_ms)
@@ -149,6 +159,18 @@ class BehaviorPacket(Packet):
                     pkt.write_fixed1616(combat.pulse_direct_damage)
                     pkt.write_fixed1616(combat.pulse_launch_speed)
                     pkt.write_fixed1616(combat.pulse_refire_seconds)
+                elif is_scout_gun:
+                    for value in (combat.scout_machinegun_fuel_cost, combat.scout_machinegun_damage,
+                                  combat.scout_machinegun_range, combat.scout_machinegun_refire_seconds):
+                        pkt.write_fixed1616(value)
+                elif is_repair:
+                    for value in (combat.repair_fuel_per_second * 0.04, combat.repair_health_per_second * 0.04,
+                                  combat.repair_range, 0.04):
+                        pkt.write_fixed1616(value)
+                elif is_piercer:
+                    for value in (combat.piercer_fuel_cost, combat.piercer_damage,
+                                  combat.piercer_launch_speed, combat.piercer_refire_seconds):
+                        pkt.write_fixed1616(value)
                 elif is_gun_turret:
                     # Exact compiled type-30 defaults. The first fixed field
                     # remains unresolved and is zero in the initializer.

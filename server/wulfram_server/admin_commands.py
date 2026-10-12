@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import queue
 import random
 import re
@@ -41,6 +41,8 @@ class MatchState:
     armed: bool = False
     winner_team: int | None = None
     pending_map: str | None = None
+    started_at: float = field(default_factory=time.monotonic)
+    team_scores: dict[int, int] = field(default_factory=lambda: {1: 0, 2: 0})
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,19 +78,48 @@ def process(context: Any, message: str) -> bool:
     if not parts:
         return False
     command = parts[0].casefold()
-    if command not in {"help", "status", "map", "bot", "team"}:
+    if command not in {"help", "status", "score", "vehicle", "map", "bot", "team"}:
         return False
-    if not bool(getattr(context.session, "is_admin", False)):
-        _send(context, "Administrator access required.")
-        return True
 
     if command == "help":
         _send(
             context,
-            "Admin commands: /s status, /s map <map-name>, "
-            "/s bot add [name] [1|2], /s bot remove <name|all>, "
-            "/s team <red|blue|neutral>",
+            "Choose a team and click a friendly repair pad to spawn. "
+            "Destroy the enemy repair pads and remaining vehicles to win. "
+            "/s status shows the round; /s score shows your results. "
+            "/s vehicle tank|scout|siege chooses your next loadout.",
         )
+        if bool(getattr(context.session, "is_admin", False)):
+            _send(context, "Admin: /s map <map>, /s bot add [name] [1|2], "
+                  "/s bot remove <name|all>, /s team <red|blue|neutral>")
+        return True
+
+    if command in {"status", "score"}:
+        from wulfram_server.matches import score_for, seconds_remaining
+        remaining = seconds_remaining(context.server)
+        clock = f"{remaining // 60}:{remaining % 60:02d} left" if remaining is not None else "untimed"
+        state = context.server.match_state
+        _send(context, f"{context.server.current_map_name}: Red {state.team_scores[1]} - "
+              f"Blue {state.team_scores[2]} | {clock}")
+        if command == "score":
+            score = score_for(context.session)
+            _send(context, f"You: {score.kills} kills, {score.deaths} deaths, {score.structures} "
+                  f"structures, {score.healing:.0f} repaired HP, {score.points} points. "
+                  "Vehicle = 1 point; base unit = 3; 100 repaired HP = 1.")
+        return True
+
+    if command == "vehicle":
+        from wulfram_server.vehicles import LOADOUTS
+        if len(parts) != 2 or parts[1].lower() not in (*LOADOUTS, "auto"):
+            _send(context, "Use /s vehicle tank|scout|siege|auto. Siege has heavy armor but cannot carry cargo.")
+        else:
+            context.session.vehicle_loadout = parts[1].lower()
+            _send(context, f"{parts[1].title()} selected for your next deployments. "
+                  "/s vehicle auto restores the map's vehicle selector.")
+        return True
+
+    if not bool(getattr(context.session, "is_admin", False)):
+        _send(context, "Administrator access required.")
         return True
 
     if command == "team":
@@ -128,19 +159,6 @@ def process(context: Any, message: str) -> bool:
             _send(context, "An administrative change is already queued.")
             return True
         _send(context, f"Bot {action} queued.")
-        return True
-
-    if command == "status":
-        players = sum(
-            bool(getattr(session, "is_logged_in", False))
-            for session in context.server.sessions
-        )
-        entities = len(context.server.entities.get_all())
-        _send(
-            context,
-            f"Server status: map={context.server.current_map_name} "
-            f"players={players} entities={entities}",
-        )
         return True
 
     if len(parts) != 2:
@@ -252,7 +270,7 @@ def _queue_automatic_map_change(
 
 
 def check_win_condition(server: Any) -> None:
-    """Announce an elimination win and queue a random configured map."""
+    """End an elimination or timed round and queue a configured map."""
     if getattr(server, "map_change_transition", None) is not None:
         return
     state = getattr(server, "match_state", None)
@@ -264,7 +282,7 @@ def check_win_condition(server: Any) -> None:
         if state.pending_map is not None and _queue_automatic_map_change(
             server,
             state.pending_map,
-            f"{TEAM_NAMES[state.winner_team]} team victory",
+            f"{TEAM_NAMES.get(state.winner_team, 'Draw')} round result",
         ):
             state.pending_map = None
         return
@@ -280,38 +298,43 @@ def check_win_condition(server: Any) -> None:
         return
 
     eliminated = [team_id for team_id in COMPETING_TEAM_IDS if not resources[team_id]]
-    if len(eliminated) != 1:
-        return
-    losing_team = eliminated[0]
-    winning_team = 2 if losing_team == 1 else 1
-    if not resources[winning_team]:
+    from wulfram_server.matches import seconds_remaining
+    expired = seconds_remaining(server) == 0
+    if len(eliminated) == 2:
+        winning_team = 0
+    elif len(eliminated) == 1:
+        winning_team = 3 - eliminated[0]
+    elif expired:
+        red, blue = state.team_scores[1], state.team_scores[2]
+        winning_team = 1 if red > blue else 2 if blue > red else 0
+    else:
         return
 
     next_map = _choose_rotation_map(server)
     state.winner_team = winning_team
     state.pending_map = next_map
-    winner_name = TEAM_NAMES[winning_team]
-    loser_name = TEAM_NAMES[losing_team]
+    result = f"{TEAM_NAMES[winning_team]} team wins" if winning_team else "Round drawn"
+    score_line = f"Red {state.team_scores[1]} - Blue {state.team_scores[2]}"
     if next_map is None:
         _broadcast_system_message(
             server,
-            f"{winner_name} team wins! No valid rotation map is available.",
+            f"{result}! {score_line}. No valid rotation map is available.",
         )
         print(
-            f"[match] winner={winner_name} loser={loser_name} "
+            f"[match] winner={winning_team} "
             "map_change=unavailable"
         )
         return
 
     _broadcast_system_message(
         server,
-        f"{winner_name} team wins! Next map: {next_map}.",
+        f"{result}! {score_line}. Next map: {next_map}.",
     )
-    print(f"[match] winner={winner_name} loser={loser_name} next_map={next_map}")
+    print(f"[match] winner={winning_team} score={score_line!r} next_map={next_map}")
     if _queue_automatic_map_change(
         server,
         next_map,
-        f"{winner_name} team victory",
+        result,
     ):
         state.pending_map = None
 
@@ -480,6 +503,8 @@ def _complete_map_change(server: Any, transition: MapChangeTransition) -> None:
     server.first_map_load = True
     server.map_change_transition = None
     server.match_state = MatchState()
+    from wulfram_server.matches import reset_round
+    reset_round(server)
     app.broadcast(server, WorldStatsPacket(map_name=map_name))
     # The client resets its entity registry on WORLD_STATS. Wait for its next
     # WANT_UPDATES before sending either the snapshot or ordinary world updates.

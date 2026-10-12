@@ -43,6 +43,8 @@ class EntityManager:
             30: 300.0,
         }.get(unit_type, 100.0)
         entity.health_points = entity.max_health
+        if unit_type == 1:
+            entity.weapon_table_id = 1
         if unit_type == 30:
             # Behavior weapon table 3 is the Gun Turret table. Include the
             # empty ready-state channel in its initial definition/update so a
@@ -56,7 +58,7 @@ class EntityManager:
             | UpdateMask.POS
             | UpdateMask.ROT
         )
-        if unit_type == 30:
+        if unit_type in (1, 30):
             initial_mask |= UpdateMask.WEAPON
         entity.mark_dirty(initial_mask)
         

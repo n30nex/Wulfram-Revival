@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import hashlib
 import importlib.util
 import json
+import math
 from pathlib import Path
 import sys
 import sysconfig
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
     from wulfram_server.core.land import LandMap
 
 
-PYTHON_BINDING_API_VERSION = 12
+PYTHON_BINDING_API_VERSION = 13
 TANK_UNIT_TYPE = 0
 SCOUT_UNIT_TYPE = 1
 PLAYER_VEHICLE_UNIT_TYPES = frozenset((TANK_UNIT_TYPE, SCOUT_UNIT_TYPE))
@@ -318,6 +319,32 @@ class PhysicsWorldHost:
                 entity_id=entity_id,
                 impulse=impulse,
             ))
+
+    def spend_fuel(self, entity: GameEntity, amount: float) -> bool:
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError("fuel amount must be finite and nonnegative")
+        with self._lock:
+            if self._maximum_fuel <= 0 or entity.energy * self._maximum_fuel < amount:
+                return False
+            if not entity.is_docked and (self._world is None or not self._native.consume_fuel(
+                    world=self._world, entity_id=entity.net_id, amount=amount)):
+                return False
+            entity.energy = max(0.0, entity.energy - amount / self._maximum_fuel)
+            entity.mark_dirty(UpdateMask.ENERGY)
+            return True
+
+    def refuel(self, entity: GameEntity, amount: float) -> bool:
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError("fuel amount must be finite and nonnegative")
+        with self._lock:
+            if self._maximum_fuel <= 0 or entity.energy >= 1.0 or amount == 0:
+                return False
+            if not entity.is_docked and (self._world is None or not self._native.add_fuel(
+                    world=self._world, entity_id=entity.net_id, amount=amount)):
+                return False
+            entity.energy = min(1.0, entity.energy + amount / self._maximum_fuel)
+            entity.mark_dirty(UpdateMask.ENERGY)
+            return True
 
     def _load_collision_asset(self, identity: str) -> bytes:
         if identity not in self._collision_assets:

@@ -39,6 +39,7 @@ class GameConfig:
     map_rotation: tuple[str, ...] = ("crossroads", "mayhem", "meltdown")
     player_limit: int = 20
     bots_per_team: int = 0
+    round_seconds: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +153,7 @@ class Config:
                 "player_nametag",
                 "player_limit",
                 "bots_per_team",
+                "round_seconds",
                 "state_directory",
                 "log_directory",
                 "shutdown_timeout_seconds",
@@ -332,6 +334,8 @@ class Config:
                 map_rotation=map_rotation,
                 player_limit=player_limit,
                 bots_per_team=bots_per_team,
+                round_seconds=_integer(server, "round_seconds", "[server]", minimum=0, maximum=7200)
+                    if "round_seconds" in server else 0,
             ),
             player=PlayerConfig(
                 nametag=_string(server, "player_nametag", "[server]")

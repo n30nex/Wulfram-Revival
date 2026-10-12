@@ -35,6 +35,7 @@ class LargeMatchPackets(unittest.TestCase):
                 if bits.take(1):
                     self.assertEqual(bits.take(5), 1)
                     bits.take(10); bits.take(10)
+                    bits.take(2); bits.take(8)  # Enabled Scout flags and repair charge.
                 for _ in range(bits.take(8)):
                     received.append(bits.take(32))
                     bits.take(1)

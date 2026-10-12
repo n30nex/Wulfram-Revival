@@ -1,6 +1,6 @@
 # Canadaverse Wulfram II
 
-This fork adds simple combat CPU tanks and a native Raspberry Pi 5 server
+This fork adds combat CPU players and a native Raspberry Pi 5 server
 configuration to baffler's portable Physics Core. The first client target is
 Windows. Original game assets remain separate from this AGPL source tree.
 
@@ -78,11 +78,59 @@ to your host. Store distinct player/admin credentials in the root-readable
 `/opt/canadaverse/wulfram/content`, with a source checkout at `current`.
 
 `bots_per_team = 32` starts 64 CPU players; `player_limit = 80` leaves 16 human
-slots. The Pi profile uses this configuration. CPU tanks
+slots. The client receives a 40-player limit per team from the same server
+capacity; its old independent 20-player default incorrectly blocked team
+selection when 32 bots were present. Human and bot respawns share a pad
+reservation lock. An occupied human-selected pad falls back to the nearest
+living, unoccupied friendly pad, or returns a busy message if none is free.
+The Pi profile uses this configuration. CPU vehicles
 pursue enemy vehicles and bases, use the normal weapons/fuel/cooldown rules,
 and respawn from unoccupied living friendly pads. Navigation is direct pursuit
 with jumping, so difficult terrain can still strand them. These are basic
 combat opponents, without base-building strategy or route planning.
+
+### Gameplay additions under client validation
+
+The current branch adds real kill/death counters, team points and timed rounds.
+Destroying an enemy vehicle earns one point, a base structure earns three,
+and a Scout earns one point for each 100 health repaired. Eliminating the
+opposing team's survival resources still wins; a timed round otherwise uses
+team points, with ties recorded as draws. The Pi profile uses 20-minute rounds
+and Crossroads/Mayhem rotation. `/s score` and `/s status` are available to
+players. Session kill/death totals survive map changes; round scores reset.
+
+Each 32-bot team uses 20 Tanks, eight Support Scouts and four Siege loadouts.
+Scouts use a machine gun and a fuel/charge-limited friendly repair beam.
+Siege uses the existing Tank chassis with 180 health and cannot carry cargo.
+The Tank's Piercer is a faster direct-hit projectile without pulse splash.
+Choose `/s vehicle tank|scout|siege|auto` for the next deployment. `auto`
+restores the original map-screen Tank/Scout choice. Low-resource bots return
+to friendly service pads, and Scouts seek nearby damaged allies.
+
+Weapon fuel debit and pad refueling now use native authority. These changes
+require Python binding API **13**; rebuild the native module with the source
+before deploying this branch. Reusing the live API-12 module is rejected.
+
+Generate the original Frontier map into a new, external map directory:
+
+```text
+python scripts/build-frontier-map.py /path/to/content/shared/data/maps/frontier
+```
+
+Its three approaches, eight pads per team and midfield construction cargo use
+the preserved client's existing textures and models. Copy the generated
+`shared/data/maps/frontier` directory to both server and client before adding
+`frontier` to rotation. The generator refuses to overwrite an existing map.
+Its client rendering remains a release gate.
+
+With the client closed, `scripts/prepare-controls.ps1 -ClientDir <path>` applies
+WASD movement, Q/E turning and Space jump while preserving the mouse and arrow
+controls. `-Preset classic` restores the saved original vehicle keymaps.
+
+The server writes an allowlisted `public.json` in its state directory every
+five seconds for a future player-page status feed. It contains match state,
+public callsigns and scores, with no addresses or credentials. A web exporter
+must copy only that file and treat stale timestamps as unavailable.
 
 Large-match updates are split into datagrams of at most 1200 bytes. Each team
 shares the encoded bot/world updates, while player poses and vital statistics
@@ -103,7 +151,10 @@ The Windows display launcher under `client/windows/` is an experimental retail
 client patch. It verifies the executable hash and patches only a newly created,
 suspended process, leaving the original executable unchanged. Native widescreen
 gameplay and menu clicking have been exercised, but HUD, login and map layout
-work remains. It is not yet the public client package.
+work remains. F12 capture is repaired by converting the renderer's RGB24
+readback to RGB565 before the original BMP writer; `--self-test` checks the
+conversion, and a real login-screen capture has been verified. It is not yet
+the public client package.
 
 ## Public connection
 

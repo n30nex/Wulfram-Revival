@@ -62,6 +62,11 @@ def prepare_operational_directories(server: Any) -> None:
     write_runtime_status(server, "starting")
 
 
+def write_public_match_status(server: Any) -> None:
+    from wulfram_server.matches import public_snapshot
+    _atomic_json(server.cfg.runtime.state_directory / "public.json", public_snapshot(server))
+
+
 def consume_shutdown_request(server: Any) -> bool:
     request = server.cfg.runtime.state_directory / SHUTDOWN_REQUEST_FILENAME
     try:

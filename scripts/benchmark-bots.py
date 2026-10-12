@@ -27,6 +27,8 @@ def main():
     parser.add_argument("--clients", type=int, default=0, choices=range(17), metavar="0..16",
                         help="additional bot-driven players with real snapshot serialization and an in-memory transport")
     parser.add_argument("--map", default="crossroads")
+    parser.add_argument("--rotation", nargs="+")
+    parser.add_argument("--round-seconds", type=int, default=0, choices=range(7201), metavar="0..7200")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -34,7 +36,8 @@ def main():
         root = Path(temporary)
         cfg = Config()
         cfg = replace(cfg,
-            game=replace(cfg.game, map_name=args.map, map_rotation=(args.map,),
+            game=replace(cfg.game, map_name=args.map, map_rotation=tuple(args.rotation or [args.map]),
+                         round_seconds=args.round_seconds,
                          player_limit=80, bots_per_team=args.bots // 2),
             runtime=replace(cfg.runtime, state_directory=root / "state", log_directory=root / "logs"))
         hooks = ProductionHooks(cfg, {"WULFRAM_SERVER_PASSWORD": "benchmark-player",
@@ -42,10 +45,14 @@ def main():
         samples, step_seconds = [], []
         traffic = {"datagrams": 0, "bytes": 0, "max_update_bytes": 0}
 
-        def receive_packet(packet):
+        def receive_packet(packet, session=None):
             payload = packet if isinstance(packet, bytes) else packet.serialize()
             traffic["datagrams"] += 1
             traffic["bytes"] += len(payload)
+            if payload and payload[0] == 0x16 and session is not None:
+                # Emulate a loaded client for continued load measurement.
+                # Real client map loading is validated separately.
+                session.is_ready_for_updates = True
             if payload and payload[0] in (0x0E, 0x0F):
                 traffic["max_update_bytes"] = max(traffic["max_update_bytes"], len(payload))
         with args.output.with_suffix(".log").open("w", encoding="utf-8") as log, contextlib.redirect_stdout(log):
@@ -56,7 +63,7 @@ def main():
                 for index in range(args.clients):
                     client = server.bots.add(name=f"LoadClient{index+1}")
                     client.is_bot = False
-                    client.udp_context = SimpleNamespace(send=receive_packet)
+                    client.udp_context = SimpleNamespace(send=lambda packet, owner=client: receive_packet(packet, owner))
                 original_step = server.physics.step
 
                 def measured_step(land):
@@ -72,7 +79,8 @@ def main():
                     while time.monotonic() - started < args.seconds and not server.stop_update_event.wait(1):
                         live = sum(bot.is_bot and bot.entity is not None and bot.entity.is_manned for bot in server.bots.bots)
                         samples.append({"seconds": round(time.monotonic() - started, 1), "live_bots": live,
-                                        "entities": len(server.entities.get_all()), "ticks": server.physics.metrics.ticks})
+                                        "entities": len(server.entities.get_all()), "ticks": server.physics.metrics.ticks,
+                                        "map": server.current_map_name})
                     server.stop_update_event.set()
 
                 observer = threading.Thread(target=monitor, daemon=True)
@@ -90,6 +98,7 @@ def main():
                           "physics_step_p95_ms": round(1000 * ordered[int(.95 * (len(ordered)-1))], 3) if ordered else None,
                           "physics_step_mean_ms": round(1000 * statistics.mean(ordered), 3) if ordered else None,
                           "samples": samples}
+                report["maps_seen"] = sorted({sample["map"] for sample in samples})
                 report["passed"] = (report["bots"] == args.bots and metrics.ticks >= .95 * args.seconds * 25
                                     and report["peak_live_bots"] == args.bots
                                     and metrics.dropped_catch_up_ticks <= max(1, metrics.ticks // 100)

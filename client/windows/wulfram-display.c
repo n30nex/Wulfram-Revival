@@ -13,6 +13,8 @@
 #include <string.h>
 #include <wchar.h>
 
+_Static_assert(sizeof(void*) == 4, "Build this retail launcher for 32-bit x86.");
+
 /* Exact retail 2.1.5B image. Original files are never patched on disk. */
 static const unsigned char retail_sha256[32] = {
     0x94,0x99,0x08,0x64,0xab,0x1d,0xb2,0xdd,0xbe,0x26,0x52,0xcf,0xdb,0xca,0x72,0x63,
@@ -64,6 +66,42 @@ static void put32(unsigned char *buffer, size_t *pos, uint32_t value) {
     memcpy(buffer + *pos, &value, 4); *pos += 4;
 }
 
+/* ESI: tightly packed RGB24, EDI: same buffer, ECX: pixel count. Conversion
+   runs forward so its two-byte output never overwrites unread RGB pixels. */
+static void emit_rgb565(unsigned char *code, size_t *n) {
+    code[(*n)++]=0x85; code[(*n)++]=0xc9;
+    code[(*n)++]=0x74; size_t empty=(*n)++;
+    size_t loop=*n;
+    const unsigned char body[]={
+        0x0f,0xb6,0x06,0xc1,0xe8,0x03,0xc1,0xe0,0x0b,
+        0x0f,0xb6,0x56,0x01,0xc1,0xea,0x02,0xc1,0xe2,0x05,0x09,0xd0,
+        0x0f,0xb6,0x56,0x02,0xc1,0xea,0x03,0x09,0xd0,
+        0x66,0x89,0x07,0x83,0xc6,0x03,0x83,0xc7,0x02,0x49,0x75
+    };
+    memcpy(code+*n,body,sizeof(body)); *n+=sizeof(body);
+    code[*n]=(unsigned char)(loop-*n-1); ++*n;
+    code[empty]=(unsigned char)(*n-empty-1);
+}
+
+static int screenshot_self_test(void) {
+    unsigned char code[128]={0x60,0x8b,0x74,0x24,0x24,0x89,0xf7,0x8b,0x4c,0x24,0x28};
+    size_t n=11; emit_rgb565(code,&n); code[n++]=0x61; code[n++]=0xc3;
+    void *memory=VirtualAlloc(NULL,4096,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    DWORD previous;
+    if (!memory) return 1;
+    memcpy(memory,code,n);
+    if (!VirtualProtect(memory,4096,PAGE_EXECUTE_READ,&previous)
+        || !FlushInstructionCache(GetCurrentProcess(),memory,n)) { VirtualFree(memory,0,MEM_RELEASE); return 1; }
+    unsigned char rgb[]={255,0,0,0,255,0,0,0,255,255,255,255,0,0,0,123,45,67};
+    const uint16_t expected[]={0xf800,0x07e0,0x001f,0xffff,0x0000,0x7968};
+    void (__cdecl *convert)(void*,unsigned int)=(void (__cdecl *)(void*,unsigned int))memory;
+    convert(rgb,0); convert(rgb,6);
+    int ok=!memcmp(rgb,expected,sizeof(expected));
+    VirtualFree(memory,0,MEM_RELEASE);
+    puts(ok ? "SCREENSHOT_CONVERSION=PASS" : "SCREENSHOT_CONVERSION=FAIL");
+    return ok ? 0 : 1;
+}
+
 static int hook(HANDLE process, uintptr_t address, const unsigned char *original,
                 size_t overwritten, unsigned char *code, size_t size, uintptr_t resume) {
     uintptr_t remote = (uintptr_t)VirtualAllocEx(process,NULL,4096,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
@@ -101,6 +139,19 @@ static int fix_projection(HANDLE process, int width, int height) {
     return hook(process,0x00428315,original,sizeof(original),code,n,0x00428324);
 }
 
+static int fix_screenshot(HANDLE process) {
+    /* D3D returns RGB24, but Img_SaveBmp only accepts indexed 8-bit or RGB565.
+       Convert the game's own readback buffer, then use its existing BMP writer. */
+    const unsigned char original[]={0x8b,0x4d,0xe8,0xc1,0xe1,0x03,0x8b,0x55,0x08};
+    unsigned char code[128]={0x9c,0x60,0x8b,0x75,0xec,0x89,0xf7,0x8b,0x4d,0xfc,0x0f,0xaf,0x4d,0xf8};
+    size_t n=14;
+    emit_rgb565(code,&n);
+    const unsigned char finish[]={0xc7,0x45,0xe8,0x02,0x00,0x00,0x00,0x61,0x9d};
+    memcpy(code+n,finish,sizeof(finish)); n+=sizeof(finish);
+    memcpy(code+n,original,sizeof(original)); n+=sizeof(original);
+    return hook(process,0x004af629,original,sizeof(original),code,n,0x004af632);
+}
+
 static void emit_offset(unsigned char *code, size_t *n, int x, int y, int root) {
     code[(*n)++]=0x9c; code[(*n)++]=0x60; /* preserve flags and registers */
     if (root) { code[(*n)++]=0xa1; put32(code,n,0x005f56ac); }
@@ -127,7 +178,14 @@ static int fix_cockpit(HANDLE process, int width, int height) {
     emit_offset(code,&n,0,-y,1);
     code[n++]=0xb8; put32(code,&n,0x00450c40); code[n++]=0xff; code[n++]=0xd0;
     emit_offset(code,&n,0,y,1);
-    return hook(process,0x0042466d,meter_call,sizeof(meter_call),code,n,0x00424672);
+    if (!hook(process,0x0042466d,meter_call,sizeof(meter_call),code,n,0x00424672)) return 0;
+    /* Team counts share the top status row with the meters. */
+    static const unsigned char team_call[]={0xe8,0xdf,0xfb,0xff,0xff};
+    n=0;
+    emit_offset(code,&n,0,-y,1);
+    code[n++]=0xb8; put32(code,&n,0x00424260); code[n++]=0xff; code[n++]=0xd0;
+    emit_offset(code,&n,0,y,1);
+    return hook(process,0x0042467c,team_call,sizeof(team_call),code,n,0x00424681);
 }
 
 static int patch_display(HANDLE process, int width, int height) {
@@ -148,10 +206,12 @@ static int patch_display(HANDLE process, int width, int height) {
         && patch(process,0x00577ae0,old_console_min,console_min,8)
         && patch(process,0x00577b00,old_console_max,console_max,8)
         && fix_projection(process,width,height)
-        && fix_cockpit(process,width,height);
+        && fix_cockpit(process,width,height)
+        && fix_screenshot(process);
 }
 
 int wmain(int argc, wchar_t **argv) {
+    if (argc==2 && !wcscmp(argv[1],L"--self-test")) return screenshot_self_test();
     if (argc != 2 && argc != 4 && argc != 5) {
         fwprintf(stderr,L"Usage: wulfram-display.exe CLIENT_DIRECTORY [WIDTH HEIGHT [SERVER]]\n");
         return 2;

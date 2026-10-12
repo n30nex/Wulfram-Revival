@@ -68,19 +68,21 @@ class AddToRosterPacket(Packet):
     team: int
     name: str
     nametag: str
+    total_kills: int = 0
+    total_deaths: int = 0
 
     def serialize(self) -> bytes:
         pkt = PacketWriter()
         pkt.write_int32(self.account_id)
         pkt.write_int32(0)   # unknown
         pkt.write_int16(self.team)    # team
-        pkt.write_int16(2)            # unk14, deaths
+        pkt.write_int16(2)            # Preserve the legacy non-stat field.
         pkt.write_string(self.name)
         pkt.write_string(self.nametag)
-        pkt.write_int16(2)           # kills?
-        pkt.write_int16(2)            # deaths?
-        pkt.write_fixed1616(6.9)      # Score
-        pkt.write_int32(2)            # ?
+        pkt.write_int16(min(65535, self.total_kills))
+        pkt.write_int16(min(65535, self.total_deaths))
+        pkt.write_fixed1616(0.0)      # Kudos are not fabricated.
+        pkt.write_int32(2)            # Preserve the legacy trailing field.
 
         return b'\x1A' + pkt.get_bytes()
 
@@ -123,23 +125,28 @@ class UpdateStatsPacket(Packet):
     """
     player_id: int
     team_id: int
+    total_kills: int = 0
+    total_deaths: int = 0
+    round_kills: int = 0
 
     def serialize(self) -> bytes:
         pkt = PacketWriter()
         
         pkt.write_int32(self.player_id)
-        pkt.write_int32(6)              # Unknown Int 1
+        pkt.write_int32(6)              # Preserve the legacy non-stat field.
         pkt.write_int16(self.team_id)   # Team ID
-        pkt.write_int16(33)             # Unknown Short 1
+        pkt.write_int16(33)             # Preserve the legacy non-stat field.
         
         # 3 Stats (Shorts)
-        pkt.write_int16(3)
-        pkt.write_int16(5)
-        pkt.write_int16(9)
+        # Retail roster +0x18/+0x1c form the displayed kill/death ratio;
+        # +0x20 is the current match's Kills counter (decoder 0x0046d730).
+        pkt.write_int16(min(65535, self.total_kills))
+        pkt.write_int16(min(65535, self.total_deaths))
+        pkt.write_int16(min(65535, self.round_kills))
         
         # Fixed Point values
-        pkt.write_fixed1616(1.0)
-        pkt.write_fixed1616(1.0)
+        pkt.write_fixed1616(0.0)
+        pkt.write_fixed1616(0.0)
         
-        pkt.write_int32(10)           # Extra / Flags
+        pkt.write_int32(10)          # Preserve the legacy trailing field.
         return b'\x1C' + pkt.get_bytes()

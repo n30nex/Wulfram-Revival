@@ -59,7 +59,7 @@ from wulfram_server.network.packets import (
     EntityTransient, ExplosionTransient, PositionalTransient, TransientArrayPacket,
     GameClockPacket, HelloPacket, TeamInfoPacket, ReincarnatePacket,
     TankPacket, BehaviorPacket, TranslationPacket,
-    UpdateStatsPacket, CommMessagePacket,
+    CommMessagePacket,
 )
 from wulfram_server.network.packets.packet_logger import PacketLogger, log_packet
 
@@ -101,6 +101,9 @@ class ClientSession:
         # Identity
         self.player_id: int = 0
         self.name: str = "Unknown"
+        self.vehicle_loadout: str = "auto"
+        from wulfram_server.matches import PlayerScore
+        self.score = PlayerScore()
         self.team: int = 0
 
         # --- SESSION KEY LOGIC ---
@@ -196,6 +199,9 @@ class WulframServerContext:
     ):
         self.cfg = cfg
         self.packet_cfg = packet_cfg
+        # Retail Team_IsFull (0x00474eb0) counts every roster member, including
+        # bots. Its Behavior limit must match the configured match capacity.
+        self.packet_cfg.behavior.header.total_team_size = (cfg.game.player_limit + 1) // 2
         self.content_root = Path(content_root).resolve()
         self.hooks = hooks
         self.release_identity = release_identity or ReleaseIdentity.source_checkout()
@@ -636,6 +642,7 @@ def _note_entity_spawn(
     entity: GameEntity,
     source: str,
 ) -> None:
+    entity.score_owner_id = session.player_id
     session.death_cleanup_at = 0.0
     session.death_delete_explosion = False
     entity.is_docked = False
@@ -677,13 +684,8 @@ def switch_session_team(context: TcpContext | UdpContext, team_id: int) -> bool:
             | UpdateMask.HARD_SYNC
         )
 
-    broadcast(
-        context.server,
-        UpdateStatsPacket(
-            player_id=session.player_id,
-            team_id=team_id,
-        ),
-    )
+    from wulfram_server.matches import stats_packet
+    broadcast(context.server, stats_packet(session))
     trace_state = getattr(getattr(context.server, "trace", None), "state", None)
     if callable(trace_state):
         trace_state(
@@ -1054,13 +1056,14 @@ def _update_ground_docking(server: WulframServerContext) -> None:
         )
 
 
-def _local_stats(entity: GameEntity) -> tuple[float, float, int, int, float]:
+def _local_stats(entity: GameEntity) -> tuple[float, float, int, int, float, float]:
     return (
         entity.health,
         entity.energy,
         entity.weapon_table_id,
         entity.weapon_ready_mask,
         entity.pulse_charge,
+        entity.repair_charge,
     )
 
 
@@ -1070,6 +1073,7 @@ def _destroy_authoritative_entity(
     *,
     explosion: bool,
     defer_player_removal: bool = True,
+    killer_player_id: int | None = None,
 ) -> bool:
     """Perform the one terminal transition shared by every lethal source."""
     if server.entities.get_entity(entity.net_id) is not entity:
@@ -1096,9 +1100,12 @@ def _destroy_authoritative_entity(
         (session for session in server.sessions if session.entity is entity),
         None,
     )
+    if owner_session is not None and getattr(owner_session, "death_cleanup_at", 0.0) > 0.0:
+        return False
+    if killer_player_id is not None:
+        from wulfram_server.matches import record_destruction
+        record_destruction(server, entity, killer_player_id)
     if owner_session is not None:
-        if getattr(owner_session, "death_cleanup_at", 0.0) > 0.0:
-            return False
         if getattr(owner_session, "carried_cargo_item_id", None) is not None:
             owner_session.carried_cargo_item_id = None
             owner_session.carried_cargo_team_id = 0
@@ -1212,6 +1219,8 @@ def _pickup_cargo(
 ) -> bool:
     if carrier.entity is None or carrier.carried_cargo_item_id is not None:
         return False
+    if carrier.entity.vehicle_loadout == "siege":
+        return False
     if cargo.unit_type != CARGO_UNIT_TYPE:
         return False
     if not CARGO_ITEM_ID_MIN <= cargo.cargo_item_id <= CARGO_ITEM_ID_MAX:
@@ -1220,7 +1229,7 @@ def _pickup_cargo(
         return False
 
     carrier.carried_cargo_item_id = cargo.cargo_item_id
-    carrier.carried_cargo_team_id = cargo.team_id
+    carrier.carried_cargo_team_id = carrier.team if cargo.team_id == 0 else cargo.team_id
     server.entities.remove_entity(cargo.net_id)
     broadcast(server, DeleteObjectPacket(cargo.net_id, explosion=False))
     _send_carrying_info(server, carrier, has_cargo=True)
@@ -1286,6 +1295,7 @@ def _handle_cargo_request(
         pos=tuple(entity.pos) if deploy else _cargo_drop_position(entity),
     )
     spawned.rot = tuple(entity.rot)
+    spawned.score_owner_id = carrier.player_id
     spawned.mark_dirty(UpdateMask.ROT | UpdateMask.HARD_SYNC)
     if not deploy:
         spawned.cargo_item_id = item_id
@@ -1308,6 +1318,7 @@ def _finalize_combat_destructions(
                 server,
                 entity,
                 explosion=destruction.explosion,
+                killer_player_id=destruction.killer_player_id,
             )
 
 def _broadcast_dirty_state(
@@ -1723,14 +1734,14 @@ def on_want_updates(ctx: TcpContext, payload: bytes):
                 source_player_id=ctx.session.player_id, 
                 chat_scope_id=0, 
                 recepient_id=0, 
-                message="Server: Welcome to Wulfram on Wulf-Forge!"
+                message=f"Welcome to {ctx.server.cfg.game.display_name}. {ctx.server.cfg.game.motd}"
             ))
     ctx.send(CommMessagePacket(
                 message_type=0,
                 source_player_id=ctx.session.player_id, 
                 chat_scope_id=0, 
                 recepient_id=0, 
-                message="To spawn in type /s spawn"
+                message="Choose a team and click a friendly repair pad to deploy. /s help and /s score are available."
             ))
     # SEND FULL WORLD SNAPSHOT
     snapshots = ctx.server.entities.get_snapshot_packets(
@@ -2061,56 +2072,70 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
             ctx.send(ReincarnatePacket(code=4))
             return
         
-        # Find the selected entity (the repair pad they clicked on to spawn in)
-        repair_pad = ctx.server.entities.get_entity(net_id)
-        if not repair_pad:
-            send_system_message(ctx, "Can't find selected spawn point.")
-            ctx.send(ReincarnatePacket(code=4)) # Can't enter yet. Game not ready.
-            return
+        with ctx.server.bots.spawn_lock:
+            # Find the selected entity (the repair pad they clicked on to spawn in)
+            repair_pad = ctx.server.entities.get_entity(net_id)
+            if (not repair_pad or repair_pad.unit_type != 27 or repair_pad.team_id != ctx.session.team
+                    or ctx.session.team not in (1, 2) or repair_pad.health_points <= 0):
+                send_system_message(ctx, "Can't find selected spawn point.")
+                ctx.send(ReincarnatePacket(code=4)) # Can't enter yet. Game not ready.
+                return
 
-        # 1. Create the Entity (Dynamic ID)
-        # We DO NOT pass override_net_id, so EntityManager assigns a new unique ID.
-        new_entity = ctx.server.entities.create_entity(
-            unit_type=unit_id, 
-            team_id=ctx.session.team,
-            pos=repair_pad.pos,
-            rot=repair_pad.rot,
-            # Keep the entity out of the game-loop reconciliation until the
-            # authoritative host can create and finalize its body under one
-            # physics lock.
-            is_manned=False,
-            register=False,
-        )
+            selected_pad = repair_pad
+            repair_pad = ctx.server.bots._spawn_pad(ctx.session.team, require_free=True, preferred_id=net_id)
+            if repair_pad is None:
+                send_system_message(ctx, "All friendly repair pads are occupied. Try again in a moment.")
+                ctx.send(ReincarnatePacket(code=4))
+                return
+            if repair_pad is not selected_pad:
+                send_system_message(ctx, "Selected pad occupied; deploying at the nearest free friendly pad.")
 
-        # 2. Assign to Session
-        # Remove old entity if exists
-        if ctx.session.entity:
-            ctx.server.hooks.entity_removed(ctx.session, "reincarnate")
-            del_pkt = ctx.server.entities.remove_entity(ctx.session.entity.net_id)
-            if del_pkt is not None: broadcast(ctx.server, del_pkt)
+            # 1. Create the Entity (Dynamic ID)
+            # We DO NOT pass override_net_id, so EntityManager assigns a new unique ID.
+            from wulfram_server.vehicles import LOADOUTS, chosen_loadout, apply_loadout
+            loadout = chosen_loadout(ctx.session, unit_id)
+            unit_id = LOADOUTS[loadout][0]
+            new_entity = ctx.server.entities.create_entity(
+                unit_type=unit_id,
+                team_id=ctx.session.team,
+                pos=repair_pad.pos,
+                rot=repair_pad.rot,
+                # Keep the entity out of the game-loop reconciliation until the
+                # authoritative host can create and finalize its body under one
+                # physics lock.
+                is_manned=False,
+                register=False,
+            )
 
-        ctx.session.entity = new_entity
-        # The TankPacket's compact weapon-state tail is selected by this table
-        # ID. Tank is table 0 and Scout is table 1; using table 0 for both only
-        # appeared to work while the Tank table contained no enabled channels.
-        ctx.session.entity.weapon_table_id = unit_id
-        physics = getattr(ctx.server, "physics", None)
-        if physics is not None:
-            physics.finalize_spawn_pose(new_entity, ctx.server.land)
-        else:
-            new_entity.is_manned = True
-        # Native authority registers under its physics lock. The idempotent
-        # call also publishes non-native and unsupported vehicle spawns only
-        # after their complete pose is ready.
-        ctx.server.entities.register_entity(new_entity)
+            apply_loadout(new_entity, loadout)
+            # 2. Assign to Session
+            # Remove old entity if exists
+            if ctx.session.entity:
+                ctx.server.hooks.entity_removed(ctx.session, "reincarnate")
+                del_pkt = ctx.server.entities.remove_entity(ctx.session.entity.net_id)
+                if del_pkt is not None: broadcast(ctx.server, del_pkt)
+
+            ctx.session.entity = new_entity
+            # The TankPacket's compact weapon-state tail is selected by this table
+            # ID. Tank is table 0 and Scout is table 1; using table 0 for both only
+            # appeared to work while the Tank table contained no enabled channels.
+            ctx.session.entity.weapon_table_id = unit_id
+            physics = getattr(ctx.server, "physics", None)
+            if physics is not None:
+                physics.finalize_spawn_pose(new_entity, ctx.server.land)
+            else:
+                new_entity.is_manned = True
+            # Native authority registers under its physics lock. The idempotent
+            # call also publishes non-native and unsupported vehicle spawns only
+            # after their complete pose is ready.
+            ctx.server.entities.register_entity(new_entity)
         ctx.session.construction_ready_at = 0.0
         _note_entity_spawn(ctx.session, new_entity, "reincarnate")
 
         # 3. Notify the Client
-        spawn_x, spawn_y, spawn_z = new_entity.pos
         send_system_message(
             ctx,
-            f"Spawning Player #{new_entity.net_id} at x={spawn_x:.2f}, y={spawn_y:.2f}, z={spawn_z:.2f}...",
+            f"{loadout.title()} deployed.",
         )
 
         # 4. Send TankPacket with the NEW Dynamic ID
@@ -2155,10 +2180,8 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
                 defer_player_removal=False,
             )
         ctx.session.team = team_id
-        broadcast(
-            ctx.server,
-            UpdateStatsPacket(player_id=ctx.session.player_id, team_id=team_id),
-        )
+        from wulfram_server.matches import stats_packet
+        broadcast(ctx.server, stats_packet(ctx.session))
 
     ctx.server.trace.state(
         "TEAM_JOINED",
@@ -2750,15 +2773,20 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
     # --- ROSTER SYNC ---
     
     # 1. Create the Roster Packet for THIS new player
+    from wulfram_server.matches import score_for, stats_packet
+    my_score = score_for(ctx.session)
     my_roster_pkt = AddToRosterPacket(
         account_id=ctx.session.player_id,
         name=ctx.session.name,
         nametag=ctx.server.cfg.player.nametag,
-        team=ctx.session.team
+        team=ctx.session.team,
+        total_kills=my_score.total_kills,
+        total_deaths=my_score.total_deaths,
     )
 
     # 2. Tell ME about MYSELF (so I see myself in the list)
     ctx.send(my_roster_pkt)
+    ctx.send(stats_packet(ctx.session))
 
     # 3. Tell EVERYONE ELSE about ME
     broadcast(ctx.server, my_roster_pkt, exclude_session=ctx.session)
@@ -2766,16 +2794,20 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
     # 4. Tell ME about EVERYONE ELSE (Catch up on existing players)
     for other_session in ctx.server.sessions:
         if other_session.is_logged_in and other_session != ctx.session:
+            other_score = score_for(other_session)
             # Create a packet for the existing player
             other_pkt = AddToRosterPacket(
                 account_id=other_session.player_id,
                 name=other_session.name,
                 nametag=ctx.server.cfg.player.nametag,
-                team=other_session.team
+                team=other_session.team,
+                total_kills=other_score.total_kills,
+                total_deaths=other_score.total_deaths,
             )
             print(f"Me: {ctx.session.player_id} | Team: {ctx.session.team} | Other player: {other_session.player_id} | Team: {other_session.team}")
             # Send it to the NEW player (ctx)
             ctx.send(other_pkt)
+            ctx.send(stats_packet(other_session))
 
     ctx.send(WorldStatsPacket(map_name=ctx.server.current_map_name))
 

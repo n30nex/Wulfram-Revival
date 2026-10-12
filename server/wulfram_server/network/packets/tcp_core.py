@@ -139,9 +139,9 @@ class TeamInfoPacket(Packet):
         pkt.write_byte(2)                        # ID
         pkt.write_string("Azure_Alliance")       # Name?
         pkt.write_string("Azure Alliance")       # Team Name
-        pkt.write_string("Crimson Base")         # Base Name?
+        pkt.write_string("Azure Base")           # Base Name?
         pkt.write_string("The blue team.")       # Description?
-        pkt.write_string("Crimson Federation Wins!") # Win Message?
+        pkt.write_string("Azure Alliance Wins!") # Win Message?
         return b'\x28' + pkt.get_bytes()
     
 @dataclass

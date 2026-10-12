@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import hmac
 import os
+import time
 from typing import Any
 
 from wulfram_server import operations
@@ -128,6 +129,7 @@ class ProductionHooks(ServerHooks):
     """The only hook policy constructed by the production entry point."""
 
     def __init__(self, config: Any, environment: Mapping[str, str] | None = None):
+        self._next_public_status_at = 0.0
         values = os.environ if environment is None else environment
         self._player_password = values[config.authentication.password_environment]
         self._admin_password = values[
@@ -195,6 +197,19 @@ class ProductionHooks(ServerHooks):
 
             server.directory_client = DirectoryClient(server)
             server.directory_client.start()
+
+    def after_view_broadcast(self, server: Any) -> None:
+        now = time.monotonic()
+        if now < self._next_public_status_at:
+            return
+        self._next_public_status_at = now + 5.0
+        try:
+            operations.write_public_match_status(server)
+        except OSError as error:
+            # A failed exporter must not interrupt the simulation. The public
+            # page treats a stale timestamp as unavailable rather than online.
+            self._next_public_status_at = now + 60.0
+            print(f"[status] public snapshot could not be written: {error}")
 
     def shutdown_requested(self, server: Any) -> bool:
         return operations.consume_shutdown_request(server)

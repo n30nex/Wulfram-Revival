@@ -1,12 +1,13 @@
 [server]
 environment = "production"
 display_name = "Canadaverse Wulfram II"
-motd = "Wulfram II revival - experimental combat bots. Source: github.com/n30nex/Wulfram-Revival"
+motd = "64 CPU players. Destroy enemy repair pads and vehicles, or lead on points when time expires."
 map_name = "crossroads"
-map_rotation = ["crossroads"]
+map_rotation = ["crossroads", "mayhem"]
 player_nametag = "CANADA"
 player_limit = 80
 bots_per_team = 32
+round_seconds = 1200
 state_directory = "/var/lib/wulfram/production"
 log_directory = "/var/log/wulfram/production"
 shutdown_timeout_seconds = 15.0

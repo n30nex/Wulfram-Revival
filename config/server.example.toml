@@ -8,6 +8,8 @@ player_nametag = "STAGE"
 player_limit = 20
 # CPU tanks per team; leave room for human players. Zero disables startup bots.
 bots_per_team = 0
+# Zero leaves elimination as the only round end condition.
+round_seconds = 1200
 state_directory = "runtime/state"
 log_directory = "runtime/logs"
 shutdown_timeout_seconds = 15.0

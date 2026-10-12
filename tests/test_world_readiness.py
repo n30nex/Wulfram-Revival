@@ -17,7 +17,7 @@ from wulfram_server.hooks import ServerHooks
 def client(ready):
     return SimpleNamespace(
         is_logged_in=True, is_ready_for_updates=ready, world_announced=ready,
-        is_bot=False, name="Human", entity=None, team=1,
+        is_bot=False, name="Human", entity=None, team=1, player_id=1,
         udp_context=SimpleNamespace(send=Mock()), tcp_sock=None,
     )
 

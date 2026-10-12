@@ -104,11 +104,16 @@ class GameEntity:
     # for their selected autocannon target while projectiles use it for their
     # shooter/mother object.
     related_object_id: int = 0
+    score_owner_id: int = 0
     weapon_table_id: int = 0
     weapon_ready_mask: int = 0
     autocannon_cooldown: float = 0.0
     pulse_cooldown: float = 0.0
     pulse_charge: float = 1.0
+    repair_charge: float = 1.0
+    piercer_cooldown: float = 0.0
+    projectile_kind: str = "pulse"
+    vehicle_loadout: str = "tank"
     pulse_strength: float = 0.0
     projectile_age: float = 0.0
     projectile_target_id: int = 0

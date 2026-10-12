@@ -16,7 +16,7 @@ namespace {
 using namespace wulfram::physics;
 
 constexpr const char* kWorldCapsuleName = "wulfram.physics.World";
-constexpr int kPythonBindingApiVersion = 12;
+constexpr int kPythonBindingApiVersion = 13;
 
 struct PythonWorld {
     PythonWorld(PhysicsConfig config, TerrainGrid terrain)
@@ -1238,6 +1238,26 @@ PyObject* ApplyLinearImpulse(PyObject*, PyObject* args, PyObject* kwargs) {
     return PyBool_FromLong(world->world.ApplyLinearImpulse(entityId, impulse) ? 1 : 0);
 }
 
+PyObject* ChangeFuel(PyObject* args, PyObject* kwargs, bool add) {
+    PyObject* capsule = nullptr;
+    unsigned long long entityId = 0;
+    double amount = 0.0;
+    static const char* keywords[] = {"world", "entity_id", "amount", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OKd", const_cast<char**>(keywords),
+                                    &capsule, &entityId, &amount)) return nullptr;
+    PythonWorld* world = GetWorld(capsule);
+    if (world == nullptr) return nullptr;
+    if (!std::isfinite(amount) || amount < 0.0 || amount > std::numeric_limits<float>::max()) {
+        PyErr_SetString(PyExc_ValueError, "fuel amount must be finite and nonnegative");
+        return nullptr;
+    }
+    return PyBool_FromLong(add ? world->world.AddFuel(entityId, static_cast<float>(amount))
+                              : world->world.ConsumeFuel(entityId, static_cast<float>(amount)));
+}
+
+PyObject* ConsumeFuel(PyObject*, PyObject* args, PyObject* kwargs) { return ChangeFuel(args, kwargs, false); }
+PyObject* AddFuel(PyObject*, PyObject* args, PyObject* kwargs) { return ChangeFuel(args, kwargs, true); }
+
 PyObject* WriteSnapshot(PyObject*, PyObject* args) {
     PyObject* capsule = nullptr;
     if (!PyArg_ParseTuple(args, "O:write_snapshot", &capsule)) {
@@ -1411,6 +1431,10 @@ PyMethodDef kMethods[] = {
         METH_VARARGS | METH_KEYWORDS,
         "Apply an authoritative world-space linear impulse to a dynamic body.",
     },
+    {"consume_fuel", reinterpret_cast<PyCFunction>(ConsumeFuel), METH_VARARGS | METH_KEYWORDS,
+     "Consume authoritative vehicle fuel if the full amount is available."},
+    {"add_fuel", reinterpret_cast<PyCFunction>(AddFuel), METH_VARARGS | METH_KEYWORDS,
+     "Refuel an authoritative vehicle up to its configured capacity."},
     {"write_snapshot", WriteSnapshot, METH_VARARGS, "Copy the current authoritative snapshot to Python."},
     {"drain_trace_events", DrainTraceEvents, METH_VARARGS, "Copy and clear native trace events."},
     {

@@ -3,6 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import math
+import struct
 import sys
 import tempfile
 import unittest
@@ -29,12 +30,37 @@ def make_server():
         get_next_player_id=lambda: next(ids), map_change_transition=None,
     )
     server.bots = BotManager(server)
+    def spend_fuel(entity, amount):
+        if entity.energy * 33000 < amount:
+            return False
+        entity.energy = max(0.0, entity.energy - amount / 33000)
+        return True
+    server.physics.spend_fuel = spend_fuel
+    server.physics.refuel = lambda entity, amount: setattr(entity, "energy", min(1.0, entity.energy + amount / 33000))
     server.entities.create_entity(27, 1, (0.0, 0.0, 0.0))
     server.entities.create_entity(27, 2, (500.0, 0.0, 0.0))
     return server
 
 
 class BotTests(unittest.TestCase):
+    def test_retail_team_capacity_leaves_human_slots_with_64_bots(self):
+        from wulfram_server.application import WulframServerContext
+        from wulfram_server.network.packets.behavior import BehaviorPacket
+        cfg = Config(game=replace(Config().game, player_limit=80, bots_per_team=32))
+        hooks = ServerHooks()
+        hooks.authoritative_physics_enabled = False
+        server = WulframServerContext(cfg, PacketConfig(), content_root=ROOT, hooks=hooks)
+        try:
+            wire = BehaviorPacket(server.packet_cfg.behavior).serialize()
+            # The retail decoder stores the header's int at 0x67917c; the
+            # team chooser compares its roster count against this value.
+            capacity = struct.unpack_from(">i", wire, 22)[0]
+            self.assertEqual(capacity, 40)
+            self.assertEqual(capacity - cfg.game.bots_per_team, 8)
+        finally:
+            server.tcp_sock.close()
+            server.udp_sock.close()
+
     def test_fight_uses_authoritative_combat_and_pursues_obstructed_targets(self):
         server = make_server()
         bot = server.bots.add("Red CPU", 1)
@@ -76,6 +102,20 @@ class BotTests(unittest.TestCase):
         second.entity.pos = (100.0, 50.0, 15.0)
         server.bots.step(100.0)
         self.assertEqual(queued.entity.pos, (100.0, 0.0, 15.0))
+
+    def test_human_pad_choice_uses_nearest_free_friendly_pad(self):
+        server = make_server()
+        near = server.entities.create_entity(27, 1, (80.0, 0.0, 0.0))
+        far = server.entities.create_entity(27, 1, (200.0, 0.0, 0.0))
+        preferred = server.entities.get_entity(1)
+        choose = lambda: server.bots._spawn_pad(1, require_free=True, preferred_id=preferred.net_id)
+        self.assertIs(choose(), preferred)
+        server.entities.create_entity(0, 1, (0.0, 0.0, 15.0))
+        self.assertIs(choose(), near)
+        server.entities.create_entity(1, 2, (80.0, 0.0, 15.0))
+        self.assertIs(choose(), far)
+        far.set_health_points(0)
+        self.assertIsNone(choose())
 
     def test_turns_toward_enemy_and_never_spawns_on_enemy_pad(self):
         server = make_server()

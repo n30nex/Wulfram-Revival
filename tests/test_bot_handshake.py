@@ -119,6 +119,18 @@ class BotHandshakeTests(unittest.TestCase):
             transport.send_payload(b"\x39\x01")
             self.assertTrue(hooks.world_synced.wait(3))
             self.assertTrue(session.is_ready_for_updates)
+            session.team = 1
+            free_pad = server.entities.create_entity(27, 1, (400.0, 0.0, 0.0))
+            # The first pad is occupied by a bot. Exercise the real UDP route,
+            # not only the selector, and verify a second request cannot stack
+            # another vehicle when every friendly pad is occupied.
+            dispatch_udp(b"\x25" + struct.pack(">HHBiiii", 1, 22, 0, 1, 0, 2000, 700))
+            vehicle = session.entity
+            self.assertIsNotNone(vehicle)
+            self.assertEqual(vehicle.pos, free_pad.pos)
+            self.assertEqual(vehicle.health, 1.0)
+            dispatch_udp(b"\x25" + struct.pack(">HHBiiii", 2, 22, 0, 1, 0, 2000, 700))
+            self.assertIs(session.entity, vehicle)
         finally:
             session.key_echoed_event.set()
             session.login_received.set()

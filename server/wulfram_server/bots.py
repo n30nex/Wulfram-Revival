@@ -3,11 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import math
 import random
+import threading
 import time
 from typing import Any
 
 from wulfram_server.core.entity import GameEntity
-from wulfram_server.core.combat import AUTOCANNON_ACTION, PULSE_ACTION, _forward
+from wulfram_server.core.combat import AUTOCANNON_ACTION, PULSE_ACTION, REPAIR_ACTION, PIERCER_ACTION, _forward
+from wulfram_server.vehicles import LOADOUTS, apply_loadout
+from wulfram_server.matches import PlayerScore
 from wulfram_server.network.packets import (
     AddToRosterPacket,
     BirthNoticePacket,
@@ -17,7 +20,6 @@ from wulfram_server.network.packets import (
 
 
 REPAIR_PAD_UNIT_TYPE = 27
-BOT_VEHICLE_UNIT_TYPE = 0
 BOT_NAME_LIMIT = 24
 BOT_SPAWN_HEIGHT_OFFSET = 15.0
 BOT_TARGET_UNIT_TYPES = frozenset((0, 1, 25, 26, 27, 29, 30))
@@ -31,6 +33,9 @@ class BotSession:
     player_id: int
     name: str
     team: int
+    vehicle_loadout: str = "tank"
+    resupplying: bool = False
+    score: PlayerScore = field(default_factory=PlayerScore)
     entity: GameEntity | None = None
     is_logged_in: bool = True
     is_ready_for_updates: bool = True
@@ -64,6 +69,8 @@ class BotManager:
         self.server = server
         self._bots: list[BotSession] = []
         self._next_default_name = 1
+        # Bot respawns and human UDP requests share the same pad reservation.
+        self.spawn_lock = threading.Lock()
 
     @property
     def bots(self) -> tuple[BotSession, ...]:
@@ -89,8 +96,9 @@ class BotManager:
                 counts[team] += 1
         return 1 if counts[1] <= counts[2] else 2
 
-    def _spawn_pad(self, team: int, *, require_free: bool = False) -> GameEntity | None:
+    def _spawn_pad(self, team: int, *, require_free: bool = False, preferred_id: int | None = None) -> GameEntity | None:
         entities = self.server.entities.get_all()
+        preferred = self.server.entities.get_entity(preferred_id) if preferred_id is not None else None
         pads = sorted(
             (
                 entity
@@ -99,7 +107,7 @@ class BotManager:
                 and entity.team_id == team
                 and entity.health_points > 0.0
             ),
-            key=lambda entity: entity.net_id,
+            key=lambda entity: (math.dist(entity.pos, preferred.pos) if preferred else 0, entity.net_id),
         )
         for pad in pads:
             spawn_pos = (pad.pos[0], pad.pos[1], pad.pos[2] + BOT_SPAWN_HEIGHT_OFFSET)
@@ -114,11 +122,16 @@ class BotManager:
     def can_spawn(self, team: int) -> bool:
         return self._spawn_pad(team) is not None
 
-    def add(self, name: str | None = None, team: int | None = None) -> BotSession:
+    def add(self, name: str | None = None, team: int | None = None, loadout: str | None = None) -> BotSession:
         if team is None:
             team = self._choose_team()
         if team not in (1, 2):
             raise ValueError("bot team must be 1 or 2")
+        if loadout is None:
+            team_index = sum(bot.team == team for bot in self._bots)
+            loadout = ("tank", "tank", "scout", "tank", "siege", "tank", "scout", "tank")[team_index % 8]
+        if loadout not in LOADOUTS:
+            raise ValueError("unknown bot loadout")
         if not name:
             name = self._default_name()
         if len(name) > BOT_NAME_LIMIT:
@@ -144,6 +157,7 @@ class BotManager:
             player_id=player_id,
             name=name,
             team=team,
+            vehicle_loadout=loadout,
             rng=random.Random(player_id),
         )
         self._bots.append(bot)
@@ -163,6 +177,10 @@ class BotManager:
         return bot
 
     def _spawn(self, bot: BotSession, now: float) -> bool:
+        with self.spawn_lock:
+            return self._spawn_locked(bot, now)
+
+    def _spawn_locked(self, bot: BotSession, now: float) -> bool:
         if getattr(self.server, "map_change_transition", None) is not None:
             return False
         # Try every friendly pad before queuing an overlapping respawn.
@@ -176,13 +194,14 @@ class BotManager:
             pad.pos[2] + BOT_SPAWN_HEIGHT_OFFSET,
         )
         entity = self.server.entities.create_entity(
-            unit_type=BOT_VEHICLE_UNIT_TYPE,
+            unit_type=LOADOUTS[bot.vehicle_loadout][0],
             team_id=bot.team,
             pos=spawn_pos,
         )
         entity.rot = pad.rot
         entity.is_manned = True
-        entity.weapon_table_id = BOT_VEHICLE_UNIT_TYPE
+        apply_loadout(entity, bot.vehicle_loadout)
+        bot.resupplying = False
         bot.entity = entity
         bot.construction_ready_at = 0.0
         bot.next_decision_at = now
@@ -230,12 +249,38 @@ class BotManager:
             return
         # ponytail: direct pursuit can get stuck on terrain; add waypoints if
         # real matches show jumping and steering cannot reach the other base.
+        all_entities = self.server.entities.get_all()
         targets = [
-            target for target in self.server.entities.get_all()
+            target for target in all_entities
             if target.team_id in (1, 2) and target.team_id != bot.team
             and target.unit_type in BOT_TARGET_UNIT_TYPES
             and target.health_points > 0.0
         ]
+        combat = self.server.packet_cfg.combat
+        if entity.energy < 0.18 or entity.health < 0.3:
+            bot.resupplying = True
+        service_targets = []
+        if bot.resupplying:
+            if entity.health >= 0.9 and entity.energy >= 0.85:
+                bot.resupplying = False
+            else:
+                desired_pad = 27 if entity.health < 0.9 else 26
+                service_targets = [item for item in all_entities if item.unit_type == desired_pad
+                                   and item.team_id == bot.team and item.health_points > 0]
+        healing_targets = []
+        if entity.unit_type == 1 and not service_targets:
+            healing_targets = [item for item in all_entities
+                               if item is not entity and item.team_id == bot.team and 0 < item.health < 0.85
+                               and item.unit_type in (0, 1, 25, 26, 27, 29, 30)
+                               and math.dist(item.pos, entity.pos) <= 600]
+        if service_targets:
+            targets = service_targets
+        elif healing_targets:
+            targets = healing_targets
+        elif bot.vehicle_loadout == "siege":
+            nearby = [item for item in targets if item.unit_type in (0, 1) and math.dist(item.pos, entity.pos) < 250]
+            bases = [item for item in targets if item.unit_type in (25, 26, 27, 29, 30)]
+            targets = nearby or bases or targets
         target = min(
             targets,
             key=lambda other: (math.dist(entity.pos, other.pos), other.net_id),
@@ -244,6 +289,8 @@ class BotManager:
         entity.actions[AUTOCANNON_ACTION] = 0.0
         previous_pulse = entity.actions.get(PULSE_ACTION, 0.0)
         entity.actions[PULSE_ACTION] = 0.0
+        entity.actions[REPAIR_ACTION] = 0.0
+        entity.actions[PIERCER_ACTION] = 0.0
         entity.actions[3] = 0.0
         entity.actions[5] = 1.0
         entity.actions[6] = 0.0
@@ -261,10 +308,19 @@ class BotManager:
         turn = 2.0 * yaw_error - 1.5 * entity.spin[2]
         entity.actions[1] = -max(-1.0, min(1.0, turn))
         entity.actions[6] = max(-0.5, min(0.5, -math.atan2(dz, math.hypot(dx, dy)) / 1.4137167))
-        combat = self.server.packet_cfg.combat
         stopping_distance = min(180.0, combat.autocannon_range * 0.5)
         entity.actions[2] = 0.85 if abs(yaw_error) < 1.0 else 0.0
         bot.next_decision_at = now + 0.2
+        if service_targets:
+            entity.actions[6] = 0.0
+            if math.hypot(dx, dy) <= 15:
+                entity.actions[2] = 0.0
+            return
+        if healing_targets:
+            if distance <= combat.repair_range and abs(yaw_error) < math.radians(10):
+                entity.actions[REPAIR_ACTION] = 1.0
+                entity.actions[2] = 0.0 if distance < combat.repair_range * 0.65 else 0.35
+            return
         if distance <= 1.0e-6 or distance > combat.autocannon_range:
             return
 
@@ -280,7 +336,9 @@ class BotManager:
             entity.actions[2] = 0.0
         # Existing combat applies normal cooldowns, fuel cost, scatter and damage.
         entity.actions[AUTOCANNON_ACTION] = 1.0
-        if not previous_pulse and distance < 250.0 and alignment > math.cos(math.radians(4.0)):
+        if bot.vehicle_loadout == "siege" and alignment > math.cos(math.radians(4.0)):
+            entity.actions[PIERCER_ACTION] = 1.0
+        if entity.unit_type == 0 and not previous_pulse and distance < 250.0 and alignment > math.cos(math.radians(4.0)):
             entity.actions[PULSE_ACTION] = 1.0
 
     def step(self, now: float) -> None:
