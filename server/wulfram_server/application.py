@@ -12,6 +12,7 @@ import socket
 import struct
 import threading
 import time
+import traceback
 import uuid
 from typing import Dict, Tuple, Optional
 
@@ -177,13 +178,17 @@ class ClientSession:
             return
         self._cleaned_up = True
         self.stop_ping_event.set()
+        was_logged_in = self.is_logged_in
+        self.is_logged_in = False
+        self.is_ready_for_updates = False
         context = self.udp_context
         if context is not None:
             if self.server.udp_sessions.get(context.addr) is context:
                 self.server.udp_sessions.pop(context.addr, None)
-            context.session = None
-        self.udp_context = None
-        self.udp_addr = None
+        # Remove the peer from lookup immediately, but keep this closed
+        # object's references stable for an in-flight broadcast/action. Those
+        # workers may already hold this session while serializing a snapshot.
+        # stop_ping_event revokes dispatch and send; the cycle is then GC'd.
         if self.carried_cargo_item_id is not None:
             self.carried_cargo_item_id = None
             self.carried_cargo_team_id = 0
@@ -194,16 +199,13 @@ class ClientSession:
         except OSError:
             pass
         
-        if (self.is_logged_in):
+        if was_logged_in:
             broadcast(self.server, RemoveFromRosterPacket(self.player_id))
 
         if self.entity:
             self.server.hooks.entity_removed(self, "disconnect")
             del_pkt = self.server.entities.remove_entity(net_id=self.entity.net_id)
             if (del_pkt is not None): broadcast(self.server, del_pkt)
-        self.entity = None
-        self.is_logged_in = False
-        self.is_ready_for_updates = False
         self.supplied_password = ""
         self.session_key = ""
 
@@ -325,6 +327,7 @@ class WulframServerContext:
         except Exception as error:
             self.fatal_error = f"game loop failed: {type(error).__name__}: {error}"
             print(f"[server] {self.fatal_error}")
+            traceback.print_exc()
         finally:
             self.stop_event.set()
             self.stop_update_event.set()
@@ -629,6 +632,8 @@ class UdpContext:
         self.reliable_delivery_seen: dict[int, set[int]] = {}
 
     def send(self, payload: bytes | Packet):
+        if self.session is not None and self.session.stop_ping_event.is_set():
+            return
         # Type guarding: explicitly separate bytes from Packets
         if isinstance(payload, Packet):
             payload = payload.serialize()

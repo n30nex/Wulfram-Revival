@@ -73,9 +73,30 @@ class NetworkBoundaryTests(unittest.TestCase):
         self.assertEqual(len(self.server.udp_sessions), 1)
         session.cleanup()
         session.cleanup()
-        self.assertIsNone(context.session)
+        self.assertFalse(self.server.allow_packet(context, 0x25))
         self.server._receive_datagram(key, ("127.0.0.1", 40000))
         self.assertEqual(self.server.udp_sessions, {})
+
+    def test_disconnect_during_snapshot_does_not_crash_the_game_loop(self):
+        session=self.session()
+        self.server._receive_datagram(self.key_packet(session.session_key),("127.0.0.1",40000))
+        session.is_logged_in=session.is_ready_for_updates=True
+        session.entity=self.server.entities.create_entity(0,1,(0,0,15))
+        session.team=1
+        other=self.server.entities.create_entity(0,2,(100,0,15))
+        session.udp_context.transport.send.reset_mock()
+        build=self.server.entities.build_update_packets
+        def disconnect_mid_frame(*args,**kwargs):
+            payloads=list(build(*args,**kwargs))
+            session.cleanup()
+            yield from payloads
+        with patch.object(self.server.entities,'build_update_packets',disconnect_mid_frame):
+            app._broadcast_dirty_state(self.server,send_view_updates=False)
+        self.assertEqual(self.server.udp_sessions,{})
+        self.assertFalse(session.is_logged_in)
+        self.assertIsNone(self.server.entities.get_entity(session.entity.net_id))
+        self.assertIs(self.server.entities.get_entity(other.net_id),other)
+        session.udp_context.transport.send.assert_not_called()
 
     def test_key_link_does_not_authorize_gameplay_or_rename_after_login(self):
         session = self.session()
