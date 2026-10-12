@@ -73,14 +73,17 @@ try {
 
 $copies = @{'data\shapes.zip' = $shapes; 'w2reg.dll' = $CompatibilityDll}
 $textFiles = @{}
-foreach ($name in @('wulfram2_player_config', 'DDrawCompat.ini')) {
+foreach ($name in @('wulfram2_player_config', 'DDrawCompat.ini', 'DDrawCompat-wulfram2.ini')) {
     $path = Join-Path $ClientDir $name
     $textFiles[$name] = if (Test-Path -LiteralPath $path) { [IO.File]::ReadAllText($path) }
         elseif ($name -eq 'wulfram2_player_config') { ":/`r`n" } else { '' }
 }
 $textFiles['wulfram2_player_config'] = Set-Setting $textFiles['wulfram2_player_config'] 'display_system' '"D3D Alpha (supporters only)"' ' '
-foreach ($setting in @{AltTabFix='keepvidmem'; DepthFormat='32'; ResolutionScale='display(4)'; ResolutionScaleFilter='point'; SpriteAltPixelCenter='off'; ThreadPriorityBoost='on'; VertexBufferMemoryType='sysmem'; VSync='off'; DpiAwareness='permonitorv2'; FullscreenMode='borderless'; DisplayResolution='desktop'; DisplayAspectRatio='4:3'}.GetEnumerator()) {
+foreach ($setting in @{AltTabFix='keepvidmem'; DepthFormat='32'; ResolutionScale='display(1)'; ResolutionScaleFilter='point'; SpriteAltPixelCenter='off'; ThreadPriorityBoost='on'; VertexBufferMemoryType='sysmem'; VSync='off'; DpiAwareness='permonitorv2'; FullscreenMode='borderless'; DisplayResolution='desktop'; DisplayAspectRatio='app'}.GetEnumerator()) {
     $textFiles['DDrawCompat.ini'] = Set-Setting $textFiles['DDrawCompat.ini'] $setting.Key $setting.Value ' = '
+}
+foreach ($setting in @{ResolutionScale='display(1)'; DisplayAspectRatio='app'; DisplayResolution='desktop'; FullscreenMode='borderless'; DpiAwareness='permonitorv2'; SupportedResolutions='native, 640x480, 720x540, 800x600, 864x540, 960x540, 1024x768, 1280x540, 1290x540, 1296x540, 1920x540'; TextureFilter='af16x'; Antialiasing='msaa4x(0)'; SpriteDetection='point'; SpriteFilter='point'}.GetEnumerator()) {
+    $textFiles['DDrawCompat-wulfram2.ini'] = Set-Setting $textFiles['DDrawCompat-wulfram2.ini'] $setting.Key $setting.Value ' = '
 }
 if (-not (Test-Path -LiteralPath (Join-Path $ClientDir 'do_not_update'))) { $textFiles['do_not_update'] = "Retired original updater disabled for the preserved client.`r`n" }
 $changes = @()

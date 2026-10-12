@@ -420,8 +420,8 @@ int wmain(int argc, wchar_t **argv) {
     if (argc==2 && !wcscmp(argv[1],L"--self-test")) return screenshot_self_test();
     int lab=((argc==6 || argc==7) && !wcscmp(argv[5],L"--lab"))
         || (argc==6 && !wcscmp(argv[5],L"--lab-view"));
-    if (argc != 2 && argc != 4 && argc != 5 && !lab) {
-        fwprintf(stderr,L"Usage: wulfram-display.exe CLIENT_DIRECTORY [WIDTH HEIGHT [SERVER]]\n");
+    if (argc != 2 && argc != 3 && argc != 4 && argc != 5 && !lab) {
+        fwprintf(stderr,L"Usage: wulfram-display.exe CLIENT_DIRECTORY [SERVER] or [WIDTH HEIGHT [SERVER]]\n");
         return 2;
     }
     SetProcessDPIAware();
@@ -439,7 +439,7 @@ int wmain(int argc, wchar_t **argv) {
     int width=(int)((physical_width*height+physical_height/2)/physical_height);
     if (width<640) { width=640; height=(int)((physical_height*640+physical_width/2)/physical_width); }
     double ui_scale=(double)physical_height/height;
-    const wchar_t *server=argc>=5 ? argv[4] : L"wulfram.canadaverse.org";
+    const wchar_t *server=argc>=5 ? argv[4] : argc==3 ? argv[2] : L"wulfram.canadaverse.org";
     if (!*server || wcslen(server)>253 || wcsspn(server,L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")!=wcslen(server)) return 2;
     wchar_t folder[MAX_PATH], executable[MAX_PATH], command[1024];
     DWORD length=GetFullPathNameW(argv[1],MAX_PATH,folder,NULL);
