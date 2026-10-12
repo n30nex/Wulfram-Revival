@@ -1,6 +1,7 @@
 """Round scoring and public, credential-free match information."""
 from dataclasses import dataclass
 import time
+import struct
 from typing import Any
 
 from wulfram_server.network.packets.player import UpdateStatsPacket
@@ -26,6 +27,40 @@ def score_for(session: Any) -> PlayerScore:
 def stats_packet(session: Any) -> UpdateStatsPacket:
     score = score_for(session)
     return UpdateStatsPacket(session.player_id, session.team, score.total_kills, score.total_deaths, score.kills)
+
+
+def player_stats_reply(server: Any, raw: bytes) -> bytes | None:
+    """Retail STRING_VALUE: alternating NUL-terminated keys/values, reply type 3."""
+    if not raw or len(raw)>4096 or not raw.endswith(b'\0'):
+        return None
+    fields=raw[:-1].split(b'\0')
+    if len(fields)%2 or len(fields)>64:
+        return None
+    try:
+        values={fields[i].decode('utf-8'):fields[i+1].decode('utf-8') for i in range(0,len(fields),2)}
+    except UnicodeDecodeError:
+        return None
+    name=values.get('get player stats','')
+    kind=values.get('$TYPE','current game stat')
+    if not 0<len(name)<=24 or kind not in ('current game stat','overall stat'):
+        return None
+    player=next((s for s in server.sessions if s.is_logged_in and s.name.casefold()==name.casefold()),None)
+    rows={'$NAME':name,'$TYPE':kind}
+    if player is None:
+        rows['Status']='Player is not connected'
+    else:
+        score=score_for(player)
+        overall=kind=='overall stat'
+        rows.update({'Scope':'This connection' if overall else 'Current round',
+                     'Vehicle kills':str(score.total_kills if overall else score.kills),
+                     'Deaths':str(score.total_deaths if overall else score.deaths)})
+        if not overall:
+            rows.update({'Structures destroyed':str(score.structures),'Repaired health':str(round(score.healing)),
+                         'Team points earned':str(score.points)})
+        if overall:
+            rows['Note']='Connection totals reset when you reconnect'
+    body=b''.join(key.encode('utf-8')+b'\0'+value.encode('utf-8')+b'\0' for key,value in rows.items())
+    return b'\x36'+struct.pack('>ii',3,len(body))+body
 
 
 def reset_round(server: Any) -> None:

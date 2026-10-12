@@ -4,14 +4,35 @@ import json
 import struct
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from test_bots import make_server
+from wulfram_server.network.streams import PacketReader, PacketDecodeError
 from wulfram_server import admin_commands, application as app, matches
 from wulfram_server.core.combat import Destruction
 from wulfram_server.network.packets.player import UpdateStatsPacket
 
 
 class MatchTests(unittest.TestCase):
+    def test_retail_stats_query_returns_actual_round_and_connection_counts(self):
+        server=self.server()
+        player=server.bots.add('Stats Pilot',team=1)
+        player.score=matches.PlayerScore(kills=3,deaths=2,structures=1,points=7,healing=100,total_kills=9,total_deaths=5)
+        for kind,kills in (('current game stat','3'),('overall stat','9')):
+            replies=[]
+            ctx=SimpleNamespace(server=server,session=player,send=replies.append)
+            raw=b'get player stats\0Stats Pilot\0$TYPE\0'+kind.encode()+b'\0'
+            app.on_string_value(ctx,b'\x36'+struct.pack('>ii',4,len(raw))+raw)
+            reader=PacketReader(replies[0])
+            self.assertEqual((reader.read_byte(),reader.read_int32()),(0x36,3))
+            pairs=reader.read_bytes(reader.read_int32()).rstrip(b'\0').decode().split('\0')
+            result=dict(zip(pairs[::2],pairs[1::2]))
+            self.assertEqual(result['$NAME'],'Stats Pilot')
+            self.assertEqual(result['Vehicle kills'],kills)
+        self.assertIsNone(matches.player_stats_reply(server,b'get player stats\0unfinished'))
+        with self.assertRaises(PacketDecodeError):
+            app.on_string_value(ctx,b'\x36'+struct.pack('>ii',4,1000000))
+
     def server(self):
         server = make_server()
         server.current_map_name = "crossroads"

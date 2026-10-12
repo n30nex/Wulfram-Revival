@@ -1754,6 +1754,23 @@ def on_kudos(ctx: TcpContext, payload: bytes):
     print(">>> !kudos (0x4F)")
 
 
+@dispatcher.datagram_route(0x36)
+@dispatcher.route(0x36)
+def on_string_value(ctx: TcpContext | UdpContext, payload_or_reader: bytes | PacketReader):
+    reader=PacketReader(payload_or_reader) if isinstance(payload_or_reader,bytes) else payload_or_reader
+    if isinstance(payload_or_reader,bytes): reader.read_byte()
+    kind=reader.read_int32()
+    size=reader.read_int32()
+    if not 0<=size<=4096: raise PacketDecodeError('Invalid STRING_VALUE size')
+    raw=reader.read_bytes(size)
+    if kind!=4 or not ctx.session or not ctx.session.is_logged_in:
+        return
+    from wulfram_server.matches import player_stats_reply
+    reply=player_stats_reply(ctx.server,raw)
+    if reply is not None:
+        ctx.send(reply)
+
+
 # --- UDP Routes ---
 
 def _read_bounded_count(

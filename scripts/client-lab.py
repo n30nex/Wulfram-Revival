@@ -22,6 +22,7 @@ import zipfile
 RETAIL = '94990864ab1db2ddbe2652cfdbca726356b19dd3fb7597945e297a43973d99d4'
 ARCHIVE = 'eb8a70bffaa4370c6b311cdbf438e67700da563625285ce93d4a0dcfa75dbf4e'
 NAV_CALLBACKS = (0x4934f0,0x43dda0,0x474d20,0x483850,0x45aa20,0x4a0220,0x41e190)
+NAV_SCENES = dict(zip(NAV_CALLBACKS,('teams','map','your-stats','team-stats','ranks','units','credits')))
 MENU_CALLBACKS = (*NAV_CALLBACKS,0x4622e0,0x484a90)
 
 
@@ -166,13 +167,13 @@ class ClientProcess:
         size = list(struct.unpack('<ii', self.read(driver + 0xdc, 8))) if driver else [0, 0]
         viewer = self.uint(0x677f70)
         callback = self.uint(viewer + 0xc) if viewer else 0
-        scene = ('teams' if viewer and viewer == self.uint(0x678038) else
-                 'map' if viewer and viewer == self.uint(0x67803c) else
+        scene = (NAV_SCENES[callback] if callback in NAV_SCENES else
                  'world' if callback == 0x441c50 else
                  'login' if callback == 0x4622e0 else 'other')
         views = {name: self.viewport(address) for name, address in (
             ('root', 0x5f56ac), ('world', 0x5f567c), ('chat', 0x5f5698),
-            ('current', 0x677fa4), ('entry_map',0x684210), ('vehicle_preview', 0x684220))}
+            ('current', 0x677fa4), ('entry_map',0x684210), ('vehicle_preview', 0x684220),
+            ('units_left',0x66ebc0), ('units_right',0x66ebb8))}
         problems = []
         if not callback:
             problems.append('The client UI is not ready yet.')
@@ -185,6 +186,11 @@ class ClientProcess:
         current = views['entry_map']
         if menu and current and current['size'] == [343,344] and current['origin'] != [291+origin[0],4+origin[1]]:
             problems.append('The entry-map texture viewport is detached from its frame.')
+        if scene=='units':
+            for name,x,y,width,height in (('units_left',55,69,233,154),('units_right',330,66,254,161)):
+                pane=views[name]
+                if not pane or pane['origin']!=[x+origin[0],y+origin[1]] or pane['size']!=[width,height]:
+                    problems.append('A Units Info model viewport is detached from its frame.')
         widgets, seen = [], set()
         node = self.uint(viewer+0x28) if viewer else 0
         while node and node not in seen and len(seen) < 200:
@@ -205,6 +211,7 @@ class ClientProcess:
                 'renderer':size, 'scene':scene, 'active_viewer':hex(viewer),
                 'team':self.uint(0x677f30), 'screen_mode':self.uint(0x5de09c), 'draw_callback':hex(callback),
                 'viewports':views, 'windows':self.windows(), 'widgets':widgets,
+                  'cursor_position':[self.uint(0x677d18),self.uint(0x677104)],
                 'hull':struct.unpack('<f',self.read(tank+0xd0,4))[0] if tank else None,
                 'tint_mode':self.uint(0x577e98), 'layout_problems':problems}
 
@@ -242,6 +249,24 @@ def check_map_image(path, state):
     state['entry_map_pixel_coverage'] = round(coverage,4)
     if coverage < .85:
         state['layout_problems'].append('The entry-map image is mostly blank or clipped.')
+
+
+def check_cursor_image(path, state):
+    """Use on a dark menu control: verify the drawn arrow reaches its input point."""
+    data=path.read_bytes()
+    offset=struct.unpack_from('<I',data,10)[0]
+    width,height=struct.unpack_from('<ii',data,18)
+    if data[:2]!=b'BM' or struct.unpack_from('<H',data,28)[0]!=24 or height<=0:
+        raise ValueError('Unexpected cursor screenshot format')
+    stride=(width*3+3)&~3
+    cx,cy=state['cursor_position']
+    bright=0
+    for y in range(max(0,cy-2),min(height,cy+16)):
+        for x in range(max(0,cx-2),min(width,cx+16)):
+            at=offset+(height-1-y)*stride+x*3
+            bright+=min(data[at:at+3])>=224
+    state['cursor_bright_pixels_at_input']=bright
+    if bright<5: state['layout_problems'].append('The software cursor is not drawn at the input coordinates.')
 
 
 def start(args, root, client):
@@ -322,10 +347,12 @@ def main():
     launch.add_argument('--scene',choices=('login','teams','map'),default='login')
     for name in ('inspect','capture','stop','click'):
         command = sub.add_parser(name); command.add_argument('--run',type=Path,required=True)
-        if name == 'capture': command.add_argument('--label',required=True)
+        if name == 'capture':
+            command.add_argument('--label',required=True)
+            command.add_argument('--verify-cursor',action='store_true')
         if name == 'click':
             command.add_argument('--x',type=int,required=True); command.add_argument('--y',type=int,required=True)
-            command.add_argument('--expect-scene',choices=('teams','map','world'))
+            command.add_argument('--expect-scene',choices=(*NAV_SCENES.values(),'world'))
             command.add_argument('--expect-team',type=int,choices=(1,2))
     args = parser.parse_args(); root=args.root.resolve()
     if args.action == 'prepare': prepare(root,args.archive,args.sha256); return
@@ -357,9 +384,10 @@ def main():
                 after = process.inspect(record['logical'])
                 if expected(after): break
                 time.sleep(.1)
-            passed = expected(after) and not after['layout_problems']
+            cursor_matches = after['cursor_position']==[args.x,args.y]
+            passed = expected(after) and cursor_matches and not after['layout_problems']
             save(run/f'click-{sequence:03}.json',{'point':[args.x,args.y], 'expected_scene':args.expect_scene,
-                 'expected_team':args.expect_team,'passed':passed,'before':state,'after':after})
+                 'expected_team':args.expect_team,'passed':passed,'cursor_matches':cursor_matches,'before':state,'after':after})
             print(json.dumps({'sequence':sequence,'scene':after['scene'],'team':after['team'],'passed':passed}))
             if not passed: raise AssertionError('The clicked control did not produce the expected client state.')
             return
@@ -372,6 +400,7 @@ def main():
                 raise ValueError('The screenshot command did not produce a new image.')
             shutil.copy2(latest,run/(args.label+'.bmp'))
             check_map_image(latest,state)
+            if args.verify_cursor: check_cursor_image(latest,state)
             save(run/(args.label+'.json'),state)
             if state['layout_problems']:
                 raise AssertionError('; '.join(state['layout_problems']))

@@ -106,17 +106,20 @@ static int screenshot_self_test(void) {
 }
 
 static int hook(HANDLE process, uintptr_t address, const unsigned char *original,
-                size_t overwritten, unsigned char *code, size_t size, uintptr_t resume) {
+                size_t overwritten, const unsigned char *code, size_t size, uintptr_t resume) {
+    if (size>4091 || overwritten<5 || overwritten>64) return 0;
+    unsigned char payload[4096];
+    memcpy(payload,code,size);
     uintptr_t remote = (uintptr_t)VirtualAllocEx(process,NULL,4096,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
     if (!remote) return 0;
     if (resume) {
-        code[size++]=0xe9;
+        payload[size++]=0xe9;
         uint32_t displacement=(uint32_t)(resume-(remote+size+4));
-        put32(code,&size,displacement);
+        put32(payload,&size,displacement);
     }
     SIZE_T written = 0;
     DWORD ignored;
-    if (!WriteProcessMemory(process,(LPVOID)remote,code,size,&written) || written!=size
+    if (!WriteProcessMemory(process,(LPVOID)remote,payload,size,&written) || written!=size
         || !VirtualProtectEx(process,(LPVOID)remote,4096,PAGE_EXECUTE_READ,&ignored)
         || !FlushInstructionCache(process,(LPCVOID)remote,size)) return 0;
     unsigned char branch[64]; memset(branch,0x90,sizeof(branch));
@@ -124,6 +127,28 @@ static int hook(HANDLE process, uintptr_t address, const unsigned char *original
     uint32_t offset=(uint32_t)(remote-address-5);
     memcpy(branch+1,&offset,4);
     return patch(process,address,original,branch,overwritten);
+}
+
+static int hook_self_test(void) {
+    unsigned char *target=VirtualAlloc(NULL,4096,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    if (!target) return 1;
+    const unsigned char original[]={0x90,0x90,0x90,0x90,0x90};
+    unsigned char source[]={0x90,0xaa,0xbb,0xcc,0xdd,0xee};
+    const unsigned char expected[]={0x90,0xaa,0xbb,0xcc,0xdd,0xee};
+    memcpy(target,original,5); target[5]=0xc3;
+    DWORD protection;
+    int ok=VirtualProtect(target,4096,PAGE_EXECUTE_READ,&protection)
+        && hook(GetCurrentProcess(),(uintptr_t)target,original,5,source,1,(uintptr_t)(target+5));
+    if (ok) {
+        void (__cdecl *run)(void)=(void (__cdecl *)(void))target;
+        run();
+        ok=!memcmp(source,expected,sizeof(source));
+        int32_t displacement; memcpy(&displacement,target+1,4);
+        VirtualFree(target+5+displacement,0,MEM_RELEASE);
+    }
+    VirtualFree(target,0,MEM_RELEASE);
+    puts(ok ? "PATCH_BUFFER=PASS" : "PATCH_BUFFER=FAIL");
+    return ok ? 0 : 1;
 }
 
 static int fix_projection(HANDLE process, int width, int height) {
@@ -215,7 +240,7 @@ static int install_lab_menu_input(HANDLE process, int width, int height, uintptr
     uintptr_t box=(uintptr_t)VirtualAllocEx(process,NULL,4096,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
     uint32_t magic=0x574c4142; SIZE_T written;
     if (!box || !WriteProcessMemory(process,(LPVOID)box,&magic,4,&written) || written!=4) return 0;
-    unsigned char code[512]={0x9c,0x60,0xa1}; size_t n=3;
+    unsigned char code[768]={0x9c,0x60,0xa1}; size_t n=3;
     put32(code,&n,(uint32_t)(box+4));
     code[n++]=0x3b; code[n++]=0x05; put32(code,&n,(uint32_t)(box+8));
     code[n++]=0x0f; code[n++]=0x84; size_t idle=n; put32(code,&n,0);
@@ -237,6 +262,17 @@ static int install_lab_menu_input(HANDLE process, int width, int height, uintptr
         code[n++]=0xa1; put32(code,&n,(uint32_t)(box+12+4*i));
         code[n++]=0x3d; put32(code,&n,(uint32_t)limits[i]);
         code[n++]=0x0f; code[n++]=0x83; invalid[i]=n; put32(code,&n,0);
+        code[n++]=0xa3; put32(code,&n,(uint32_t)(box+40+4*i));
+    }
+    /* Feed valid logical positions through the real WM_MOUSEMOVE clamp before
+       dispatching menu events. Patched bounds keep this inside the window. */
+    code[n++]=0xa1; put32(code,&n,(uint32_t)(box+16));
+    code[n++]=0xc1; code[n++]=0xe0; code[n++]=16;
+    code[n++]=0x0b; code[n++]=0x05; put32(code,&n,(uint32_t)(box+12));
+    code[n++]=0x50; code[n++]=0xb8; put32(code,&n,0x004b89c0);
+    code[n++]=0xff; code[n++]=0xd0; code[n++]=0x83; code[n++]=0xc4; code[n++]=4;
+    for (int i=0;i<2;++i) {
+        code[n++]=0xa1; put32(code,&n,i ? 0x00677104 : 0x00677d18);
         code[n++]=0xa3; put32(code,&n,(uint32_t)(box+40+4*i));
     }
     emit_store(code,&n,box+48,5); /* retail left mouse button */
@@ -322,6 +358,13 @@ static int fix_menu_canvas(HANDLE process, int width, int height) {
     n=0; emit_offset(code,&n,(width-640)/2,(height-480)/2,0);
     memcpy(code+n,preview_origin,sizeof(preview_origin)); n+=sizeof(preview_origin);
     if (!hook(process,0x0043cf51,preview_origin,sizeof(preview_origin),code,n,0x0043cf57)) return 0;
+    /* Both Units Info model panes use the same viewport constructor. */
+    const unsigned char briefing_origin[]={0x89,0x7e,0x1c,0x89,0x4e,0x20};
+    n=0; code[n++]=0x50; code[n++]=0x89; code[n++]=0xf0;
+    emit_offset(code,&n,(width-640)/2,(height-480)/2,0);
+    code[n++]=0x58;
+    memcpy(code+n,briefing_origin,sizeof(briefing_origin)); n+=sizeof(briefing_origin);
+    if (!hook(process,0x0049f005,briefing_origin,sizeof(briefing_origin),code,n,0x0049f00b)) return 0;
     /* This custom map picker bypasses Widget_HitTestPoint's origin transform.
        Translate only its cursor arguments; all ordinary widget input is intact. */
     const unsigned char map_cursor[]={0x8b,0x48,0x0c,0x8b,0x50,0x08};
@@ -374,9 +417,10 @@ static int fix_menu_margins(HANDLE process, int width, int height) {
     return hook(process,0x004281ff,original,sizeof(original),code,n,0x00428204);
 }
 
-static int fix_overview_readback(HANDLE process, int width, int height) {
-    /* The 256x256 terrain-map texture is copied from the physical framebuffer,
-       not from the centered menu canvas. Use full dimensions for that readback. */
+static int fix_full_view_read(HANDLE process, int width, int height,
+        uint32_t address, const unsigned char original[6], unsigned char target_register) {
+    /* Readbacks and the software cursor use screen coordinates. Give only
+       those operations a full-framebuffer descriptor; retain widget origins. */
     uintptr_t full=(uintptr_t)VirtualAllocEx(process,NULL,4096,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
     if (!full) return 0;
     unsigned char code[128]={0x9c,0x60,0xfc,0x8b,0x35,0xac,0x56,0x5f,0x00,0xbf};
@@ -386,12 +430,36 @@ static int fix_overview_readback(HANDLE process, int width, int height) {
     emit_canvas(code,&n,width,height,0,0);
     code[n++]=0xc7; code[n++]=0x40; code[n++]=0x18; put32(code,&n,0);
     code[n++]=0x61; code[n++]=0x9d;
-    code[n++]=0xb9; put32(code,&n,(uint32_t)full);
-    const unsigned char original[]={0x8b,0x0d,0xac,0x56,0x5f,0x00};
-    return hook(process,0x0047b280,original,sizeof(original),code,n,0x0047b286);
+    code[n++]=target_register; put32(code,&n,(uint32_t)full);
+    return hook(process,address,original,6,code,n,address+6);
+}
+
+static int fix_mouse_screen_space(HANDLE process, int width, int height) {
+    /* Menu bounds must not clamp WM_MOUSEMOVE to 640x480. */
+    const unsigned char x_compare[]={0x8b,0x55,0xf8,0x3b,0x11};
+    unsigned char code[32]={0x8b,0x55,0xf8,0x81,0xfa}; size_t n=5;
+    put32(code,&n,(uint32_t)width);
+    if (!hook(process,0x004b89f8,x_compare,5,code,n,0x004b89fd)) return 0;
+    const unsigned char x_limit[]={0x8b,0x08,0x83,0xe9,0x01};
+    n=0; code[n++]=0xb9; put32(code,&n,(uint32_t)(width-1));
+    if (!hook(process,0x004b8a04,x_limit,5,code,n,0x004b8a09)) return 0;
+    const unsigned char y_compare[]={0x8b,0x45,0xfc,0x3b,0x42,0x04};
+    memcpy(code,y_compare,3); n=3; code[n++]=0x3d; put32(code,&n,(uint32_t)height);
+    if (!hook(process,0x004b8a16,y_compare,6,code,n,0x004b8a1c)) return 0;
+    const unsigned char y_limit[]={0x8b,0x51,0x04,0x83,0xea,0x01};
+    n=0; code[n++]=0xba; put32(code,&n,(uint32_t)(height-1));
+    if (!hook(process,0x004b8a24,y_limit,6,code,n,0x004b8a2a)) return 0;
+    /* Cursor input is absolute; its blit receives coordinates local to root. */
+    const unsigned char original[]={0x8b,0x55,0x10,0x52,0x8b,0x45,0x0c,0x50};
+    unsigned char local[]={0x8b,0x0d,0xac,0x56,0x5f,0x00,
+        0x8b,0x55,0x10,0x2b,0x51,0x14,0x52,
+        0x8b,0x45,0x0c,0x2b,0x41,0x10,0x50};
+    return hook(process,0x004b3b69,original,sizeof(original),local,sizeof(local),0x004b3b71)
+        && hook(process,0x004a8f0d,original,sizeof(original),local,sizeof(local),0x004a8f15);
 }
 
 static int patch_display(HANDLE process, int width, int height) {
+    const unsigned char overview_read[]={0x8b,0x0d,0xac,0x56,0x5f,0x00};
     const int old_width=640, old_height=480;
     const int old_scene[2]={640,360}, scene[2]={width,height-120};
     const int old_full[2]={640,480}, full[2]={width,height};
@@ -412,12 +480,13 @@ static int patch_display(HANDLE process, int width, int height) {
         && fix_cockpit(process,width,height)
         && fix_menu_canvas(process,width,height)
         && fix_menu_margins(process,width,height)
-        && fix_overview_readback(process,width,height)
+        && fix_full_view_read(process,width,height,0x0047b280,overview_read,0xb9)
+        && fix_mouse_screen_space(process,width,height)
         && fix_screenshot(process);
 }
 
 int wmain(int argc, wchar_t **argv) {
-    if (argc==2 && !wcscmp(argv[1],L"--self-test")) return screenshot_self_test();
+    if (argc==2 && !wcscmp(argv[1],L"--self-test")) return screenshot_self_test() || hook_self_test();
     int lab=((argc==6 || argc==7) && !wcscmp(argv[5],L"--lab"))
         || (argc==6 && !wcscmp(argv[5],L"--lab-view"));
     if (argc != 2 && argc != 3 && argc != 4 && argc != 5 && !lab) {
