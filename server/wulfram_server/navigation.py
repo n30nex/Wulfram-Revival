@@ -34,6 +34,31 @@ class TerrainRoutes:
                 if slope <= self.MAX_SLOPE:
                     self.edges[node].append((other,length*(1+2*slope)))
         self.fields = {}
+        self.fields_built = 0
+        self.components = [-1]*len(self.safe)
+        for node, safe in enumerate(self.safe):
+            if not safe or self.components[node] >= 0: continue
+            self.components[node] = node
+            pending = [node]
+            while pending:
+                current = pending.pop()
+                for other, _ in self.edges[current]:
+                    if self.components[other] < 0:
+                        self.components[other] = node
+                        pending.append(other)
+
+    def reachable_near(self, start, goal):
+        """Snap tactical approach points onto the vehicle's connected terrain."""
+        origin = self.nearest_safe(start)
+        if origin is None: return None
+        component = self.components[origin]
+        node = self.nearest_safe(goal)
+        if node is not None and self.components[node] == component:
+            return self.point(node)
+        # Tactical orders change every few seconds, not on the steering tick.
+        node = min((i for i, group in enumerate(self.components) if group == component),
+                   key=lambda i: math.dist(self.point(i),goal[:2]), default=None)
+        return self.point(node) if node is not None else None
 
     def point(self, node):
         return ((node%self.width+.5)*self.sx,(node//self.width+.5)*self.sy)
@@ -58,6 +83,7 @@ class TerrainRoutes:
     def field(self, goals):
         key = tuple(sorted({tuple(goal[:2]) for goal in goals}))
         if key not in self.fields:
+            self.fields_built += 1
             distances = [math.inf]*len(self.safe)
             next_node = [-1]*len(self.safe)
             queue = []
@@ -74,9 +100,12 @@ class TerrainRoutes:
                         distances[other] = candidate
                         next_node[other] = node
                         heapq.heappush(queue,(candidate,other))
-            if len(self.fields) >= 8: self.fields.pop(next(iter(self.fields)))
+            # Keep both patrol stops and attack approaches warm for 80 players.
+            if len(self.fields) >= 128: self.fields.pop(next(iter(self.fields)))
             self.fields[key] = (distances,next_node)
-        return self.fields[key]
+        result = self.fields.pop(key)
+        self.fields[key] = result
+        return result
 
     def clear_line(self, start, end):
         distance = math.dist(start[:2],end[:2])

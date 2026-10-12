@@ -1,6 +1,6 @@
 """Exercise real bot spawning, native physics and combat without listening on a port."""
 from dataclasses import replace
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 import argparse
 import contextlib
@@ -84,11 +84,18 @@ def main():
                             if history and history[-1][0] != entity.net_id: history.clear()
                             history.append((entity.net_id,entity.pos[:2]))
                             engaging += bot.engaging
-                            if len(history)==11 and not bot.engaging and math.dist(history[0][1],history[-1][1])<10:
+                            if len(history)==11 and bot.wants_move and math.dist(history[0][1],history[-1][1])<10:
                                 stalled += 1
+                        active = [bot for bot in server.bots.bots if bot.is_bot and bot.entity is not None and bot.entity.is_manned]
                         samples.append({"seconds": round(time.monotonic() - started, 1), "live_bots": live,
                                         "entities": len(server.entities.get_all()), "ticks": server.physics.metrics.ticks,
-                                        "stalled_bots":stalled,"engaging_bots":engaging})
+                                        "dropped_ticks":server.physics.metrics.dropped_catch_up_ticks,
+                                        "fields_built":server.bots.navigation.fields_built,
+                                        "stalled_bots":stalled,"engaging_bots":engaging,
+                                        "orders":dict(Counter(bot.order for bot in active)),
+                                        "unique_goals":len({bot.goal for bot in active if bot.goal is not None}),
+                                        "positions":[[bot.player_id,bot.team,bot.role,round(bot.entity.pos[0]),round(bot.entity.pos[1])]
+                                                     for bot in active]})
                     server.stop_update_event.set()
 
                 observer = threading.Thread(target=monitor, daemon=True)
@@ -113,6 +120,9 @@ def main():
                                     and (not args.clients or traffic["datagrams"] > 0))
                 travel = [bot.furthest_travel for bot in server.bots.bots if bot.is_bot]
                 report["navigation"] = {
+                    "roles":dict(Counter(bot.role for bot in server.bots.bots if bot.is_bot)),
+                    "peak_unique_goals":max((s['unique_goals'] for s in samples),default=0),
+                    "fields_built":server.bots.navigation.fields_built,
                     "bots_past_1km":sum(distance >= 1000 for distance in travel),
                     "median_travel":round(statistics.median(travel),1),
                     "maximum_travel":round(max(travel),1),

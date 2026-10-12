@@ -81,6 +81,7 @@ class BotTests(unittest.TestCase):
         server = make_server()
         bot = server.bots.add(team=1)
         target = server.entities.create_entity(0, 2, (0.0, 200.0, 15.0))
+        server.physics.trace_segment.return_value = {"hit": True, "entity_id": target.net_id}
         bot.next_decision_at = 0.0
         server.bots.step(100.0)
         self.assertGreater(bot.entity.current_input_sample().controls.turn, 0.0)
