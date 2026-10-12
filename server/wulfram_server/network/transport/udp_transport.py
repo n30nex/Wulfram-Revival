@@ -11,4 +11,9 @@ class UdpTransport:
         """
         Sends a packet payload (Opcode + Body) to the specified address.
         """
-        self.sock.sendto(payload, addr)
+        try:
+            self.sock.sendto(payload, addr)
+        except BlockingIOError:
+            # A saturated interface drops a datagram instead of freezing the
+            # authoritative game loop. The following snapshot repairs state.
+            pass

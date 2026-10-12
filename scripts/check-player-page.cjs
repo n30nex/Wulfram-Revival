@@ -34,7 +34,17 @@ const assert=require('node:assert/strict');
     await page.goto(url);
     await page.getByRole('heading',{name:'Server status unavailable'}).waitFor();
     await context.close();
-    fs.writeFileSync(path.join(output,'checks.json'),JSON.stringify({results,staleStatusRejected:true},null,2));
-    console.log(JSON.stringify({results,staleStatusRejected:true}));
+    for(const fixture of [{ready:false},{ready:true,url:'https://example.invalid/client.zip',sha256:'a'.repeat(64),version:'bad',bytes:1}]){
+      const unavailable=await browser.newContext();
+      const page=await unavailable.newPage();
+      await page.route('**/release.json',route=>route.fulfill({json:fixture}));
+      await page.goto(url);
+      await page.getByText('Download temporarily unavailable',{exact:true}).waitFor();
+      assert.equal(await page.locator('#download').getAttribute('href'),'#get-started');
+      assert.equal(await page.locator('#checksum').isVisible(),false);
+      await unavailable.close();
+    }
+    fs.writeFileSync(path.join(output,'checks.json'),JSON.stringify({results,staleStatusRejected:true,invalidReleaseRejected:true},null,2));
+    console.log(JSON.stringify({results,staleStatusRejected:true,invalidReleaseRejected:true}));
   } finally { await browser.close(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

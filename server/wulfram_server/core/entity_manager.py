@@ -30,8 +30,6 @@ class EntityManager:
             net_id = self._next_net_id
             self._next_net_id += 1
 
-        print(f"[DEBUG] create_entity: net_id={net_id} unit_type={unit_type} team_id={team_id} pos={pos}")
-
         entity = GameEntity(net_id=net_id, unit_type=unit_type, team_id=team_id)
         entity.pos = pos
         entity.rot = rot

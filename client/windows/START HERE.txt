@@ -2,7 +2,8 @@ CANADAVERSE WULFRAM II
 
 1. Extract the entire ZIP into a writable folder, such as Games.
 2. Open Play Canadaverse.cmd. Keep all the included files together.
-3. Choose any callsign. Public player password: canadaverse
+3. Choose a unique callsign (1-24 letters, numbers, spaces, dots, _ or -).
+   Public player password: canadaverse
 4. Click a team, open Entry Map, then click a friendly repair-pad flag.
 
 Server: wulfram.canadaverse.org

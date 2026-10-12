@@ -7,6 +7,7 @@ import ipaddress
 import math
 from pathlib import Path
 import secrets
+import select
 import socket
 import struct
 import threading
@@ -44,6 +45,7 @@ RELIABLE_REPLAY_HISTORY = 256
 from wulfram_server.network.transport.tcp_transport import TcpTransport
 from wulfram_server.network.transport.udp_transport import UdpTransport
 from wulfram_server.network.transport.envelope import UdpEnvelope
+from wulfram_server.network.limits import RateLimit
 
 from wulfram_server.network.dispatcher import PacketDispatcher
 from wulfram_server.network.streams import PacketDecodeError, PacketWriter, PacketReader
@@ -61,7 +63,7 @@ from wulfram_server.network.packets import (
     TankPacket, BehaviorPacket, TranslationPacket,
     CommMessagePacket,
 )
-from wulfram_server.network.packets.packet_logger import PacketLogger, log_packet
+from wulfram_server.network.packets.packet_logger import PacketLogger
 
 from wulfram_server.core.entity import (
     GameEntity,
@@ -108,7 +110,7 @@ class ClientSession:
 
         # --- SESSION KEY LOGIC ---
         # Generate a random 10-char key (Wulfram seems to like strings)
-        self.session_key = "Key" + secrets.token_hex(4) 
+        self.session_key = "Key" + secrets.token_hex(12)
         
         # Placeholder: We don't know the real algo yet, so we will 
         # temporarily TRUST the client's TCP echo to link this.
@@ -122,6 +124,12 @@ class ClientSession:
         self.is_admin: bool = False
         self.login_subcommand: int = 0
         self.supplied_password: str = ""
+        self.last_received_at = time.monotonic()
+        self.udp_rate = RateLimit(240, 1.0, keys=1)
+        self.tcp_rate = RateLimit(60, 1.0, keys=1)
+        self.request_rate = RateLimit(5, 1.0, keys=16)
+        self.tcp_transport = None
+        self._cleaned_up = False
 
         # Server-owned, per-client physics input sequence. It intentionally
         # survives Tank death and reincarnation within this connection.
@@ -165,7 +173,17 @@ class ClientSession:
 
     def cleanup(self):
         """Helper to close sockets and events when client disconnects."""
+        if self._cleaned_up:
+            return
+        self._cleaned_up = True
         self.stop_ping_event.set()
+        context = self.udp_context
+        if context is not None:
+            if self.server.udp_sessions.get(context.addr) is context:
+                self.server.udp_sessions.pop(context.addr, None)
+            context.session = None
+        self.udp_context = None
+        self.udp_addr = None
         if self.carried_cargo_item_id is not None:
             self.carried_cargo_item_id = None
             self.carried_cargo_team_id = 0
@@ -173,7 +191,7 @@ class ClientSession:
         self.server.hooks.cleanup_session(self)
         try:
             self.tcp_sock.close()
-        except:
+        except OSError:
             pass
         
         if (self.is_logged_in):
@@ -183,6 +201,21 @@ class ClientSession:
             self.server.hooks.entity_removed(self, "disconnect")
             del_pkt = self.server.entities.remove_entity(net_id=self.entity.net_id)
             if (del_pkt is not None): broadcast(self.server, del_pkt)
+        self.entity = None
+        self.is_logged_in = False
+        self.is_ready_for_updates = False
+        self.supplied_password = ""
+        self.session_key = ""
+
+    def disconnect(self):
+        """Wake the owning TCP worker; it performs cleanup exactly once."""
+        self.stop_ping_event.set()
+        for event in (self.key_echoed_event, self.login_received, self.d_handshake_ack_event):
+            event.set()
+        try:
+            self.tcp_sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
 class WulframServerContext:
     """
@@ -209,7 +242,7 @@ class WulframServerContext:
         # transport probes. It is never reused as the persistent server ID.
         self.instance_id = str(uuid.uuid4())
         self.started_monotonic = time.monotonic()
-        self.logger = PacketLogger()
+        self.logger = PacketLogger(enabled=cfg.debug.debug_packets)
         self.trace = hooks.create_trace()
         self.entities = EntityManager()
         self.first_map_load = False
@@ -262,25 +295,71 @@ class WulframServerContext:
         self._udp_thread: threading.Thread | None = None
         self._shutdown_lock = threading.Lock()
         self._shutdown_complete = False
-        self._directory_query_rates: dict[str, deque[float]] = {}
+        self._query_rate = RateLimit(10, 1.0)
+        self._udp_preauth_rate = RateLimit(30, 1.0)
+        self._udp_global_rate = RateLimit(4096, 1.0, keys=1)
+        self._connection_rate = RateLimit(32, 10.0)
+        self._login_lock = threading.Lock()
+        self.fatal_error = None
+        self.last_game_loop_at = time.monotonic()
+
+    def allow_packet(self, context, opcode: int) -> bool:
+        session = context.session
+        if session is None:
+            return context.transport_name == "UDP" and opcode in (0x08, 0x13)
+        if session.stop_ping_event.is_set():
+            return False
+        if not session.is_logged_in:
+            return opcode in ((0x08, 0x13) if context.transport_name == "UDP" else (0x13, 0x21, 0x4E))
+        if opcode == 0x21:  # A second LOGIN cannot rename an authenticated player.
+            return False
+        if opcode in (0x03, 0x13, 0x36, 0x4E, 0x4F) and not session.request_rate.allow(opcode):
+            return False
+        if opcode in (0x09, 0x0A, 0x19, 0x20, 0x25, 0x2B, 0x3A) and not session.is_ready_for_updates:
+            return False
+        return True
+
+    def _run_game_loop(self):
+        try:
+            global_game_loop(self)
+        except Exception as error:
+            self.fatal_error = f"game loop failed: {type(error).__name__}: {error}"
+            print(f"[server] {self.fatal_error}")
+        finally:
+            self.stop_event.set()
+            self.stop_update_event.set()
+
+    def _receive_datagram(self, data, addr):
+        if not self._udp_global_rate.allow() or not data or len(data) > 2048:
+            return
+        query_reply = try_udp_query(data, self.instance_id)
+        if query_reply is not None:
+            if self.allow_directory_query(addr[0]):
+                self.udp_transport.send(query_reply, addr)
+            return
+        ctx = self.udp_sessions.get(addr)
+        if ctx is None:
+            if not self._udp_preauth_rate.allow(addr[0]):
+                return
+            # Unverified addresses are never retained. Only a verified key may
+            # install a context, bounded by the accepted TCP player capacity.
+            ctx = UdpContext(self.udp_transport, addr, self)
+        elif ctx.session is None or not ctx.session.udp_rate.allow():
+            return
+        stripped = UdpEnvelope.try_strip_length(data)
+        packet_payloads = dispatcher.dispatch_datagram(ctx, stripped)
+        if ctx.session is not None:
+            ctx.session.last_received_at = time.monotonic()
+        self.trace.udp_datagram("client_to_server", data, addr=addr,
+                                payload_size=len(stripped), logical_packet_count=len(packet_payloads),
+                                length_header_stripped=len(stripped) != len(data))
+        for packet_payload in packet_payloads:
+            self.trace.packet("client_to_server", "UDP", packet_payload, addr=addr)
 
     def allow_directory_query(self, address: str) -> bool:
         """Bound pre-auth query work per source without creating a game session."""
 
-        now = time.monotonic()
-        samples = self._directory_query_rates.setdefault(address, deque())
-        while samples and samples[0] <= now - 1.0:
-            samples.popleft()
-        if len(samples) >= 10:
-            return False
-        samples.append(now)
-        if len(self._directory_query_rates) > 4096:
-            self._directory_query_rates = {
-                source: values
-                for source, values in self._directory_query_rates.items()
-                if values and values[-1] > now - 1.0
-            }
-        return True
+        return self._query_rate.allow(address)
 
     def get_next_player_id(self) -> int:
         """Generates a unique Player/Account ID."""
@@ -295,8 +374,7 @@ class WulframServerContext:
         """Starts the UDP listener thread and the TCP accept loop."""
         self.hooks.start(self)
         self._game_thread = threading.Thread(
-            target=global_game_loop,
-            args=(self,),
+            target=self._run_game_loop,
             daemon=True,
             name="wulfram-game-loop",
         )
@@ -304,6 +382,7 @@ class WulframServerContext:
 
         # 1. Setup UDP
         self.udp_sock.bind((self.cfg.network.host, self.cfg.network.udp_port))
+        self.udp_sock.setblocking(False)
         self.udp_transport = UdpTransport(self.udp_sock)
         actual_udp_port = int(self.udp_sock.getsockname()[1])
         print(f"[UDP] Listening on port {actual_udp_port}")
@@ -344,6 +423,8 @@ class WulframServerContext:
 
         # 3. Main Loop (Accepts TCP Clients)
         self._tcp_accept_loop()
+        if self.fatal_error is not None:
+            raise RuntimeError(self.fatal_error)
 
     def _udp_loop(self):
         """The dedicated UDP listener loop."""
@@ -354,55 +435,36 @@ class WulframServerContext:
         
         while not self.stop_event.is_set():
             try:
-                data, addr = self.udp_sock.recvfrom(2048)
-
-                query_reply = try_udp_query(data, self.instance_id)
-                if query_reply is not None:
-                    if self.allow_directory_query(addr[0]):
-                        self.udp_sock.sendto(query_reply, addr)
+                if not select.select([self.udp_sock], [], [], 0.5)[0]:
                     continue
-                
-                # Get or Create UDP Session Context
-                if addr not in self.udp_sessions:
-                    # KEY CHANGE: Do not try to match by IP. 
-                    # Create a "Sessionless" context. The Session Key (Hello Packet) 
-                    # will link this context to a player later.
-                    ctx = UdpContext(transport, addr, self, session=None)
-                    self.udp_sessions[addr] = ctx
-                    # print(f"[UDP] New connection from {addr} (Unverified)")
-
-                ctx = self.udp_sessions[addr]
-
-                stripped = UdpEnvelope.try_strip_length(data)
-                packet_payloads = dispatcher.dispatch_datagram(ctx, stripped)
-                self.trace.udp_datagram(
-                    "client_to_server",
-                    data,
-                    addr=addr,
-                    payload_size=len(stripped),
-                    logical_packet_count=len(packet_payloads),
-                    length_header_stripped=len(stripped) != len(data),
-                )
-                for packet_payload in packet_payloads:
-                    self.trace.packet(
-                        "client_to_server",
-                        ctx.transport_name,
-                        packet_payload,
-                        addr=addr,
-                    )
-
+                data, addr = self.udp_sock.recvfrom(2049)
+                self._receive_datagram(data, addr)
+            except (BlockingIOError, PacketDecodeError):
+                # Invalid public traffic is discarded without log amplification.
+                continue
             except OSError as error:
                 if self.stop_event.is_set():
                     break
                 print(f"[UDP-ERR] {error}")
             except Exception as error:
-                print(f"[UDP-ERR] {error}")  # Optional: reduce spam
+                if not self.stop_event.is_set():
+                    self.fatal_error = f"UDP worker failed: {type(error).__name__}"
+                    self.stop_event.set()
+                    print(f"[server] {self.fatal_error}")
 
     def _tcp_accept_loop(self):
         """The main blocking loop that accepts TCP connections."""
         print("Server running. Press CTRL+C to stop.")
         try:
             while not self.stop_event.is_set():
+                now = time.monotonic()
+                if now - self.last_game_loop_at > 30.0 or (self._udp_thread and not self._udp_thread.is_alive()):
+                    self.fatal_error = "simulation or UDP worker stopped responding"
+                    self.stop_event.set()
+                    break
+                for session in list(self.sessions):
+                    if isinstance(session, ClientSession) and now - session.last_received_at > 60.0:
+                        session.disconnect()
                 if self.hooks.shutdown_requested(self):
                     self.stop_event.set()
                     break
@@ -413,11 +475,10 @@ class WulframServerContext:
                 except OSError:
                     break
 
-                if try_tcp_query(
-                    client_sock,
-                    self.instance_id,
-                    allow_reply=lambda: self.allow_directory_query(addr[0]),
-                ):
+                if not self._connection_rate.allow(addr[0]) or sum(
+                    isinstance(s, ClientSession) and not s.is_logged_in and s.address[0] == addr[0]
+                    for s in self.sessions
+                ) >= 4:
                     client_sock.close()
                     continue
                 
@@ -458,6 +519,9 @@ class WulframServerContext:
             self.stop_event.set()
             self.stop_update_event.set()
             self.hooks.stop(self)
+            for session in list(self.sessions):
+                if isinstance(session, ClientSession):
+                    session.disconnect()
             for sock in (self.tcp_sock, self.udp_sock):
                 try:
                     sock.close()
@@ -479,25 +543,34 @@ class WulframServerContext:
         """
         client_sock = session.tcp_sock
         
-        # Update TcpContext to use the session
-        tcp_transport = TcpTransport(client_sock)
-        ctx = TcpContext(tcp_transport, self, session)
-        
         try:
+            # A slow directory query occupies only its bounded connection
+            # worker, never the listener or the game simulation.
+            if try_tcp_query(client_sock, self.instance_id,
+                             allow_reply=lambda: self.allow_directory_query(session.address[0])):
+                return
+            tcp_transport = TcpTransport(client_sock)
+            session.tcp_transport = tcp_transport
+            ctx = TcpContext(tcp_transport, self, session)
             do_login_and_bootstrap(client_sock, ctx, dispatcher)
             
             # Connection Loop
-            while True:
+            while not self.stop_event.is_set() and not session.stop_ping_event.is_set():
                 payload = tcp_transport.recv_payload()
                 if not payload: break
+                if not session.tcp_rate.allow():
+                    raise ConnectionError("TCP request rate exceeded")
+                session.last_received_at = time.monotonic()
                 dispatcher.dispatch_payload(ctx, payload)
                 
         except Exception as e:
             print(f"[-] Client {session.address} Disconnected: {e}")
         finally:
-            session.cleanup()
-            if session in self.sessions:
-                self.sessions.remove(session)
+            try:
+                session.cleanup()
+            finally:
+                if session in self.sessions:
+                    self.sessions.remove(session)
 
 class TcpContext:
     """
@@ -525,11 +598,8 @@ class TcpContext:
         else:
             payload = packet_data
 
-        packet_len = len(payload) + 2
-        header = struct.pack(">H", packet_len)
-        
         try:
-            self.transport.sock.sendall(header + payload)
+            self.transport.send_payload(payload)
             self.server.trace.packet(
                 "server_to_client",
                 self.transport_name,
@@ -543,7 +613,8 @@ class TcpContext:
                 include_tcp_len_prefix=True
             )
         except OSError as e:
-            print(f"[TCP-ERR] Failed to send packet: {e}")
+            self.session.disconnect()
+            raise ConnectionError("TCP send failed") from e
 
 class UdpContext:
     """Context for a UDP Endpoint (Sessionless or Session-bound)"""
@@ -598,10 +669,6 @@ class UdpContext:
         sequence = seq_num & 0xFFFF
         seen = self.reliable_delivery_seen.setdefault(packet_id, set())
         if sequence in seen:
-            print(
-                "[UDP] Suppressed duplicate reliable delivery "
-                f"opcode=0x{packet_id:02X} sequence={sequence}"
-            )
             return False
 
         order = self.reliable_delivery_order.setdefault(packet_id, deque())
@@ -1513,6 +1580,7 @@ def global_game_loop(server: WulframServerContext):
     )
 
     while not server.stop_update_event.is_set():
+        server.last_game_loop_at = time.monotonic()
         server.hooks.before_game_loop_iteration(server)
 
         now = time.monotonic()
@@ -1531,6 +1599,7 @@ def global_game_loop(server: WulframServerContext):
                         _finalize_combat_destructions(server, destructions)
                 except Exception as error:
                     print(f"[physics] FATAL authoritative step failed: {error}")
+                    server.fatal_error = f"authoritative physics failed: {type(error).__name__}"
                     server.stop_update_event.set()
                     server.stop_event.set()
                     return
@@ -1611,7 +1680,7 @@ def on_hello(
         payload = payload_or_reader
         if len(payload) < 2:
             return
-        log_packet("TCP-RECV", payload)
+        ctx.server.logger.log_packet("TCP-RECV", payload)
         reader = PacketReader(payload)
         reader.read_byte() # Op
     else:
@@ -1632,19 +1701,16 @@ def on_hello(
         # Client Echoed Key (Sub 1) - This comes from send_hello2
         client_key = reader.read_string()
         
-        print(">>> Client echoed a session key")
-
         # CASE A: We already have a session (TCP or already linked UDP)
         if ctx.session:
-            if client_key == ctx.session.session_key:
+            if (isinstance(ctx, UdpContext) and not ctx.session.stop_ping_event.is_set()
+                    and client_key == ctx.session.session_key):
                 print(f">>> [{type(ctx).__name__}] Session key verified")
                 ctx.session.key_echoed_event.set()
                 ctx.send(IdentifiedUdpPacket())
 
         # CASE B: Sessionless UDP Context (This is the new logic)
         elif isinstance(ctx, UdpContext) and ctx.session is None:
-            print(f">>> [UDP] Received session key from unlinked {ctx.addr}. Searching...")
-            
             # Find the TCP session that generated this key
             found_session = None
             for s in ctx.server.sessions:
@@ -1652,7 +1718,9 @@ def on_hello(
                 # handshake events. Only a TCP client can claim this UDP peer.
                 if not isinstance(s, ClientSession):
                     continue
-                if s.session_key == client_key:
+                if (s.session_key == client_key and not s.stop_ping_event.is_set()
+                        and s.address[0] == ctx.addr[0]
+                        and s.udp_addr in (None, ctx.addr)):
                     found_session = s
                     break
             
@@ -1663,6 +1731,7 @@ def on_hello(
                 ctx.session = found_session
                 found_session.udp_addr = ctx.addr
                 found_session.udp_context = ctx
+                ctx.server.udp_sessions[ctx.addr] = ctx
                 ctx.server.trace.state(
                     "UDP_LINKED",
                     player=found_session.player_id,
@@ -1674,8 +1743,6 @@ def on_hello(
                 
                 # 3. Reply immediately on UDP
                 ctx.send(IdentifiedUdpPacket())
-            else:
-                print("[WARN] UDP session key matched no active clients.")
 
     # HELLO subcmd 2: Not quite sure what this means
     # possibly just confirming the UDP link was verified?
@@ -1689,11 +1756,18 @@ def on_hello(
 
 @dispatcher.route(0x21)
 def on_login_request(ctx: TcpContext, payload: bytes):
+    if ctx.session.is_logged_in:
+        return
     reader = PacketReader(payload)
     reader.read_byte() # Op
     ctx.session.login_subcommand = reader.read_byte()
-    ctx.session.name = reader.read_string()
-    ctx.session.supplied_password = reader.read_string()
+    name = reader.read_string().strip()
+    password = reader.read_string()
+    if (not 1 <= len(name) <= 24 or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-." for ch in name)
+            or len(password) > 128 or ctx.session.login_subcommand not in (0, 1, 2, 3)):
+        raise PacketDecodeError("invalid callsign or login fields")
+    ctx.session.name = name
+    ctx.session.supplied_password = password
     
     print(
         ">>> Login received via Dispatcher: "
@@ -1704,7 +1778,7 @@ def on_login_request(ctx: TcpContext, payload: bytes):
 
 @dispatcher.route(0x4E)
 def on_bps_request(ctx: TcpContext, payload: bytes):
-    log_packet("TCP-RECV", payload)
+    ctx.server.logger.log_packet("TCP-RECV", payload)
     if len(payload) >= 5:
         (requested_rate,) = struct.unpack(">I", payload[1:5])
         ctx.send(BpsReplyPacket(requested_rate))
@@ -1713,8 +1787,8 @@ def on_bps_request(ctx: TcpContext, payload: bytes):
 
 @dispatcher.route(0x39)
 def on_want_updates(ctx: TcpContext, payload: bytes):
-    log_packet("TCP-RECV", payload)
-    if not ctx.session.is_logged_in or not ctx.session.world_announced:
+    ctx.server.logger.log_packet("TCP-RECV", payload)
+    if not ctx.session.is_logged_in or not ctx.session.world_announced or ctx.session.is_ready_for_updates:
         return
     print(">>> Client is ready for updates (0x39)")
     ctx.server.trace.state("WANT_UPDATES", player=ctx.session.player_id)
@@ -1750,7 +1824,7 @@ def on_want_updates(ctx: TcpContext, payload: bytes):
 
 @dispatcher.route(0x4F)
 def on_kudos(ctx: TcpContext, payload: bytes):
-    log_packet("TCP-RECV", payload)
+    ctx.server.logger.log_packet("TCP-RECV", payload)
     print(">>> !kudos (0x4F)")
 
 
@@ -1764,6 +1838,8 @@ def on_string_value(ctx: TcpContext | UdpContext, payload_or_reader: bytes | Pac
     if not 0<=size<=4096: raise PacketDecodeError('Invalid STRING_VALUE size')
     raw=reader.read_bytes(size)
     if kind!=4 or not ctx.session or not ctx.session.is_logged_in:
+        return
+    if isinstance(ctx.session, ClientSession) and not ctx.session.request_rate.allow("stats"):
         return
     from wulfram_server.matches import player_stats_reply
     reply=player_stats_reply(ctx.server,raw)
@@ -1858,7 +1934,7 @@ def on_d_handshake(ctx: UdpContext, reader: PacketReader):
         reader.read_int32()  # Packet id.
         reader.read_int32()  # Stream id.
 
-    log_packet("RECV-UDP", reader.byte_slice(packet_start))
+    ctx.server.logger.log_packet("RECV-UDP", reader.byte_slice(packet_start))
 
     if not ctx.session:
         print("[WARN] Ignored packet from unknown UDP source")
@@ -2049,6 +2125,9 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
     if not ctx.session:
         print("[WARN] Reincarnate request from sessionless UDP")
         return
+    if not ctx.session.request_rate.allow("spawn"):
+        ctx.send(ReincarnatePacket(code=4))
+        return
 
     # Check if this is a team switch or spawn request
     if (not is_team_switch):
@@ -2175,6 +2254,10 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
     print(f"    > RECV REINCARNATE (TEAM SWITCH): Team : {team_id}")
     previous_team = ctx.session.team
     if team_id in (1, 2):
+        if team_id != previous_team and sum(s.is_logged_in and s.team == team_id for s in ctx.server.sessions) >= ctx.server.packet_cfg.behavior.header.total_team_size:
+            send_system_message(ctx, "That team is full. Choose the other team.")
+            ctx.send(ReincarnatePacket(code=4))
+            return
         # The original game treats an in-world team change as a death: remove
         # the old-team vehicle and return the player to the spawn lobby before
         # publishing their new roster team.
@@ -2239,11 +2322,11 @@ def on_chat_comm_req(ctx: UdpContext, reader: PacketReader):
     source_scope = reader.read_int16()
     unk_id = reader.read_int16()
     inc_message = reader.read_string()
-
-    print(f"CHAT: id: {unk_id} | source: {source_scope} | message: {inc_message}")
-    
-    print(f"    > RECV RELIABLE (Sequence {sequence_num} | Len {payload_len})")
     if not ctx.accept_reliable_delivery(packet_id=0x20, seq_num=sequence_num):
+        return
+    if (source_scope not in (0, 1, 4) or not 1 <= len(inc_message) <= 240
+            or any(ord(ch) < 32 or ord(ch) > 126 for ch in inc_message)
+            or not ctx.session.request_rate.allow("chat")):
         return
 
     if (source_scope == 1): # /s system message
@@ -2302,6 +2385,8 @@ def _read_action_value(reader: PacketReader, action_id: int) -> float:
     """
     Reads one action value using the independently recovered packet encoding.
     """
+    if action_id not in ACTION_DUMP_IDS:
+        raise PacketDecodeError("invalid action channel")
     if action_id >= 8 or action_id == 4:
         return 1.0 if reader.read_bits(1) else 0.0
     if action_id == 5:
@@ -2486,9 +2571,6 @@ def broadcast(server: WulframServerContext, packet_data: bytes | Packet, exclude
     else:
         payload = packet_data
     
-    # We need to frame it for TCP if we fall back, so calculate header once
-    tcp_header = struct.pack(">H", len(payload) + 2)
-
     for session in server.sessions:
         # Skip not logged in or excluded sessions
         if not session.is_logged_in or session == exclude_session:
@@ -2502,8 +2584,6 @@ def broadcast(server: WulframServerContext, packet_data: bytes | Packet, exclude
             # Prefer UDP (Reliable Stream 1 is typical for game events)
             if session.udp_context:
                 session.udp_context.send(payload)
-            elif session.tcp_sock:
-                session.tcp_sock.sendall(tcp_header + payload)
         except Exception as e:
             print(f"[Broadcast] Error sending to {session.name}: {e}")
 
@@ -2511,6 +2591,9 @@ def broadcast_chat(server: WulframServerContext, message: str, source_player_id:
     """
     Sends a CommMessagePacket to all connected players (including the sender).
     """
+    source = next((s for s in server.sessions if s.player_id == source_player_id), None)
+    if source is None or not source.is_logged_in:
+        return
     packet = CommMessagePacket(
         message_type=5, # 5 = User Chat? (0=System, 1=?, 5=Chat)
         source_player_id=source_player_id, 
@@ -2526,6 +2609,8 @@ def broadcast_chat(server: WulframServerContext, message: str, source_player_id:
         # Only send to players who are fully logged in
         if not session.is_logged_in:
             continue
+        if scope_id == 4 and (source.team not in (1, 2) or session.team != source.team):
+            continue
             
         # Prefer UDP for chat (Reliable Stream 1), fallback to TCP if necessary
         try:
@@ -2533,14 +2618,6 @@ def broadcast_chat(server: WulframServerContext, message: str, source_player_id:
                 # We reuse the raw byte payload to avoid re-serializing 50 times
                 # Note: UdpContext.send handles framing
                 session.udp_context.send(encoded)
-                count += 1
-            elif session.tcp_sock:
-                # If for some reason they have no UDP yet (rare for chat), use TCP
-                # We need to manually frame it for TCP if we don't use the wrapper
-                # ideally we'd reconstruct a TcpContext, but raw send is easier here:
-                # length + payload
-                header = struct.pack(">H", len(encoded) + 2)
-                session.tcp_sock.sendall(header + encoded)
                 count += 1
         except Exception as e:
             print(f"[Broadcast] Failed to send to {session.name}: {e}")
@@ -2672,29 +2749,24 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
     # 3. The Key Exchange Loop
     # We're waiting for the client to send the session key via UDP
     print(">>> Waiting for Client Key Exchange...")
-    if (ctx.session.key_echoed_event.wait(timeout=15.0)):
+    if (ctx.session.key_echoed_event.wait(timeout=15.0) and ctx.session.udp_context is not None
+            and not ctx.session.stop_ping_event.is_set()):
         print(">>> Session key was successfully sent via UDP!")
         # And we have now sent IdentifiedUdpPacket
     else:
-        print(">>> [ERROR] Timeout: Session key was NOT sent via UDP.")
-        # TODO: probably should just close the connection, or maybe we wait forever?
+        raise ConnectionError("UDP session key exchange timed out")
 
     # --- Login Flow ---
     print(">>> Waiting for username (LOGIN 0x21)...")
     
-    start_wait = time.time()
+    login_deadline = time.monotonic() + 30.0
     
     # Wait for the login_received event (triggered by on_login_request)
     while not ctx.session.login_received.is_set():
-        if time.time() - start_wait > 30.0:
-            raise ConnectionError("Login Timed Out")
-
-        try:
-            payload = ctx.transport.recv_payload()
-            if payload:
-                dispatcher.dispatch_payload(ctx, payload)
-        except socket.timeout:
-            pass
+        payload = ctx.transport.recv_payload(deadline=login_deadline)
+        if not payload or not ctx.session.tcp_rate.allow():
+            raise ConnectionError("Login connection closed or rate exceeded")
+        dispatcher.dispatch_payload(ctx, payload)
             
     print(f">>> Username Found: {ctx.session.name}")
 
@@ -2704,9 +2776,11 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
 
         print(">>> Waiting for password (LOGIN 0x21)...")
         while True:
-            payload = ctx.transport.recv_payload()
+            payload = ctx.transport.recv_payload(deadline=login_deadline)
             if payload is None:
                 raise ConnectionError("Client disconnected during password stage.")
+            if not ctx.session.tcp_rate.allow():
+                raise ConnectionError("Login request rate exceeded")
             dispatcher.dispatch_payload(ctx, payload)
 
             ctx.server.logger.log_packet(
@@ -2719,13 +2793,16 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
             if payload and payload[0] == 0x21:
                 break
 
-    if not ctx.server.hooks.authenticate(ctx.session):
+    if ctx.session.stop_ping_event.is_set() or not ctx.server.hooks.authenticate(ctx.session):
         raise PermissionError(f"login rejected for {ctx.session.name!r}")
 
-    # Assign Unique Player ID
-    ctx.session.player_id = ctx.server.get_next_player_id()
-    ctx.session.team = 0
-    ctx.session.is_logged_in = True
+    with ctx.server._login_lock:
+        if any(s is not ctx.session and s.is_logged_in and s.name.casefold() == ctx.session.name.casefold()
+               for s in ctx.server.sessions):
+            raise PermissionError("That callsign is already connected")
+        ctx.session.player_id = ctx.server.get_next_player_id()
+        ctx.session.team = 0
+        ctx.session.is_logged_in = True
     print(f">>> Login Complete! Assigned Player ID: {ctx.session.player_id}")
     ctx.server.hooks.login_accepted(ctx.server, ctx.session)
     ctx.server.trace.state(
@@ -2750,7 +2827,8 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
     # its acknowledgement of our D_HANDSHAKE before sending world state over
     # TCP; otherwise the independent transport threads can reorder bootstrap
     # ahead of transport readiness and crash the canonical client.
-    if not ctx.session.d_handshake_ack_event.wait(timeout=5.0):
+    if (not ctx.session.d_handshake_ack_event.wait(timeout=5.0)
+            or ctx.session.stop_ping_event.is_set()):
         raise ConnectionError("UDP D_HANDSHAKE acknowledgement timed out")
     ctx.server.trace.state(
         "UDP_TRANSPORT_READY",

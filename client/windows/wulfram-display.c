@@ -46,6 +46,47 @@ static int verify_exe(const wchar_t *path) {
     return ok;
 }
 
+static int configure_resolution(const wchar_t *folder, int width, int height) {
+    /* DDrawCompat accepts only advertised modes, including emulated modes.
+       Preserve graphics presets and add this display's computed canvas. */
+    wchar_t path[MAX_PATH], backup[MAX_PATH], temporary[MAX_PATH];
+    swprintf(path,MAX_PATH,L"%ls\\DDrawCompat-wulfram2.ini",folder);
+    swprintf(backup,MAX_PATH,L"%ls\\DDrawCompat-wulfram2.ini.before-display",folder);
+    swprintf(temporary,MAX_PATH,L"%ls\\DDrawCompat-wulfram2.ini.%lu.tmp",folder,GetCurrentProcessId());
+    FILE *input=_wfopen(path,L"rb");
+    if (!input) return 0;
+    char text[65536], output[66000], setting[160];
+    size_t count=fread(text,1,sizeof(text)-1,input);
+    int ok=!ferror(input) && feof(input); fclose(input);
+    if (!ok || memchr(text,0,count)) return 0;
+    text[count]=0;
+    snprintf(setting,sizeof(setting),"SupportedResolutions = native, 640x480, 800x600, 1024x768, %dx%d\r\n",width,height);
+    size_t used=0; int found=0;
+    for (char *line=text; *line;) {
+        char *end=strchr(line,'\n');
+        size_t length=end ? (size_t)(end-line+1) : strlen(line);
+        char *key=line; while (*key==' ' || *key=='\t') ++key;
+        int match=!_strnicmp(key,"SupportedResolutions",20);
+        char *equals=key+(match ? 20 : 0);
+        while (*equals==' ' || *equals=='\t') ++equals;
+        if (match && *equals=='=') {
+            if (!found) { memcpy(output+used,setting,strlen(setting)); used+=strlen(setting); }
+            found=1;
+        } else { memcpy(output+used,line,length); used+=length; }
+        line+=length;
+    }
+    if (!found) { output[used++]='\r'; output[used++]='\n'; memcpy(output+used,setting,strlen(setting)); used+=strlen(setting); }
+    if (used==count && !memcmp(text,output,count)) return 1;
+    if (!CopyFileW(path,backup,TRUE) && GetLastError()!=ERROR_FILE_EXISTS) return 0;
+    FILE *file=_wfopen(temporary,L"wb");
+    if (!file) return 0;
+    ok=fwrite(output,1,used,file)==used;
+    ok=fclose(file)==0 && ok;
+    if (ok) ok=MoveFileExW(temporary,path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
+    if (!ok) DeleteFileW(temporary);
+    return ok;
+}
+
 static int read_memory(HANDLE process, uintptr_t address, void *out, size_t size) {
     SIZE_T actual = 0;
     return ReadProcessMemory(process, (LPCVOID)address, out, size, &actual) && actual == size;
@@ -519,9 +560,12 @@ int wmain(int argc, wchar_t **argv) {
     }
     wchar_t folder[MAX_PATH], executable[MAX_PATH], command[1024];
     DWORD length=GetFullPathNameW(argv[1],MAX_PATH,folder,NULL);
-    if (!length || length>MAX_PATH-20) return 2;
+    if (!length || length>MAX_PATH-65) return 2;
     swprintf(executable,MAX_PATH,L"%ls\\wulfram2.exe",folder);
     if (!verify_exe(executable)) { fputs("Unsupported Wulfram executable. No process started.\n",stderr); return 2; }
+    if (!configure_resolution(folder,width,height)) {
+        fputs("Could not prepare this display. Extract the complete game into a writable Games folder.\n",stderr); return 2;
+    }
     swprintf(command,1024,L"\"%ls\" -root -server %ls -port %ld",executable,server,port);
     if (lab && !wcscmp(argv[5],L"--lab")) {
         wchar_t password[128];

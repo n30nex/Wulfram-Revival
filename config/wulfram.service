@@ -4,13 +4,18 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+WatchdogSec=45
+TimeoutStartSec=90
+TimeoutAbortSec=5
+LimitCORE=0
 DynamicUser=yes
 StateDirectory=wulfram/production
 LogsDirectory=wulfram/production
 WorkingDirectory=/opt/canadaverse/wulfram/current
 EnvironmentFile=/etc/wulfram/server.env
-ExecStart=/usr/bin/python3 -u /opt/canadaverse/wulfram/current/server/main.py --config /etc/wulfram/server.toml --content-root /opt/canadaverse/wulfram/content
+ExecStart=/usr/bin/python3 -u /opt/canadaverse/wulfram/current/server/main.py --config /etc/wulfram/server.toml --content-root /opt/canadaverse/wulfram/content-current
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=25

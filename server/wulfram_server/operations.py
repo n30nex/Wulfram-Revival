@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import os
+import socket
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,18 @@ from typing import Any
 RUNTIME_STATUS_SCHEMA_VERSION = 1
 RUNTIME_STATUS_FILENAME = "runtime.json"
 SHUTDOWN_REQUEST_FILENAME = "shutdown.request"
+
+
+def notify_supervisor(message: str) -> None:
+    """Use systemd's datagram contract without adding a runtime dependency."""
+    address = os.environ.get("NOTIFY_SOCKET")
+    if not address:
+        return
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notification:
+        notification.settimeout(.2)
+        notification.sendto(message.encode("ascii"), address)
 
 
 def _utc_now() -> str:

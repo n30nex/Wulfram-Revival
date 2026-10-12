@@ -4,15 +4,20 @@ byId('copy-server').addEventListener('click',async()=>{
   try { await navigator.clipboard.writeText('wulfram.canadaverse.org'); byId('copy-server').textContent='Copied'; }
   catch { byId('copy-server').textContent='Select address to copy'; }
 });
-fetch('release.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('Release unavailable');return r.json();}).then(release=>{
-  if(!release.ready || !/^\/downloads\/wulfram\/[a-zA-Z0-9._-]+\.zip$/.test(release.url) || !/^[a-f0-9]{64}$/.test(release.sha256))return;
+fetch('release.json',{cache:'no-store',signal:AbortSignal.timeout(6000)}).then(r=>{if(!r.ok)throw Error('Release unavailable');return r.json();}).then(release=>{
+  if(release.ready!==true || !/^\/downloads\/wulfram\/[a-zA-Z0-9._-]+\.zip$/.test(release.url) || !/^[a-f0-9]{64}$/.test(release.sha256)
+      || !Number.isSafeInteger(release.bytes) || release.bytes<=0 || typeof release.version!=='string' || release.version.length>40)throw Error('Release unavailable');
   byId('download').href=release.url;
   byId('download').removeAttribute('aria-disabled');
   byId('download').textContent='Download for Windows ↗';
   byId('release-note').textContent=`Community alpha ${release.version} · Windows · Free to play`;
   byId('package-detail').textContent=`ZIP · ${(release.bytes/1024/1024).toFixed(1)} MB · Extract the entire folder before playing.`;
   byId('checksum').href=release.url+'.sha256'; byId('checksum').hidden=false;
-}).catch(()=>{});
+}).catch(()=>{
+  byId('download').textContent='Download temporarily unavailable';
+  byId('release-note').textContent='The client download could not be verified. Please try again shortly.';
+  byId('package-detail').textContent='No verified download is available right now.';
+});
 const mapNames={crossroads:'Crossroads',mayhem:'Mayhem',frontier:'Canadaverse Frontier'};
 async function refreshStatus(){
   try {

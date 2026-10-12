@@ -4,6 +4,9 @@ handle_path /wulfram/* {
     root * /srv/downloads/wulfram/site/current
     header Cache-Control "no-store"
     header Cloudflare-CDN-Cache-Control "no-store"
+    header X-Content-Type-Options "nosniff"
+    header Referrer-Policy "strict-origin-when-cross-origin"
+    header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     file_server
 }
 @wulframPackages path /downloads/wulfram/*.zip /downloads/wulfram/*.sha256

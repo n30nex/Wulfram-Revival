@@ -193,6 +193,7 @@ class ProductionHooks(ServerHooks):
 
     def server_ready(self, server: Any) -> None:
         operations.write_runtime_status(server, "ready")
+        operations.notify_supervisor("READY=1")
         if server.cfg.directory is not None:
             from wulfram_server.directory_client import DirectoryClient
 
@@ -206,6 +207,9 @@ class ProductionHooks(ServerHooks):
         self._next_public_status_at = now + 5.0
         try:
             operations.write_public_match_status(server)
+            # Only a completed simulation/broadcast iteration refreshes the
+            # watchdog. A hung main loop cannot claim the game is healthy.
+            operations.notify_supervisor("WATCHDOG=1")
         except OSError as error:
             # A failed exporter must not interrupt the simulation. The public
             # page treats a stale timestamp as unavailable rather than online.
@@ -220,6 +224,7 @@ class ProductionHooks(ServerHooks):
         if directory_client is not None:
             directory_client.stop()
         operations.write_runtime_status(server, "stopping")
+        operations.notify_supervisor("STOPPING=1")
 
     def server_stopped(self, server: Any) -> None:
         operations.write_runtime_status(server, "stopped")

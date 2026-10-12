@@ -46,9 +46,10 @@ SUBCOMMAND_OPCODES = {0x02, 0x13, 0x21}
 
 
 class PacketLogger:
-    def __init__(self):
+    def __init__(self, enabled: bool = True):
         # Map IDs to Readable Names
         self.packet_names = PACKET_NAMES
+        self.enabled = enabled
 
     # ---------------------------
     # New API (matches my log_packet)
@@ -72,7 +73,7 @@ class PacketLogger:
             If True, prints the 2-byte big-endian length prefix (len(payload)+2)
             as part of the hex dump (handy for TCP debugging).
         """
-        if not payload:
+        if not self.enabled or not payload:
             return
 
         pkt_type = payload[0]
