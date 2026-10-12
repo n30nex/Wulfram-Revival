@@ -187,6 +187,7 @@ class ProductionHooks(ServerHooks):
             for _ in range(server.cfg.game.bots_per_team):
                 for team in (1, 2):
                     server.bots.add(team=team)
+            server.bots.prepare_navigation()
 
     def server_ready(self, server: Any) -> None:
         operations.write_runtime_status(server, "ready")

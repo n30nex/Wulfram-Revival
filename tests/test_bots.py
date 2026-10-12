@@ -142,7 +142,9 @@ class BotTests(unittest.TestCase):
         server.cfg = replace(server.cfg, game=replace(server.cfg.game, bots_per_team=2))
         server.current_map_name = "crossroads"
         server.content_root = Path("unused")
-        server.land = SimpleNamespace(load=Mock(), loaded=True)
+        server.land = SimpleNamespace(loaded=True, load=Mock(),identity='fixture',revision=1,
+                                      width=3,height=3,cell_size_x=250.,cell_size_y=250.,
+                                      heights=[[0.]*3 for _ in range(3)])
         server.first_map_load = False
         hooks = ProductionHooks(server.cfg, {"WULFRAM_SERVER_PASSWORD": "player", "WULFRAM_SERVER_ADMIN_PASSWORD": "admin"})
         with patch("wulfram_server.hooks.operations.prepare_operational_directories"), patch("wulfram_server.application.load_map_state", return_value=True):

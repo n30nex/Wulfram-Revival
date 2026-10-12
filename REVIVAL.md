@@ -80,9 +80,19 @@ to your host. Store distinct player/admin credentials in the root-readable
 `bots_per_team = 32` starts 64 CPU players; `player_limit = 80` leaves 16 human
 slots. The Pi profile uses this configuration. CPU tanks
 pursue enemy vehicles and bases, use the normal weapons/fuel/cooldown rules,
-and respawn from unoccupied living friendly pads. Navigation is direct pursuit
-with jumping, so difficult terrain can still strand them. These are basic
-combat opponents, without base-building strategy or route planning.
+and respawn from unoccupied living friendly pads. Teams share cached terrain
+distance fields toward enemy bases. Routes reject steep cells and diagonal
+corner cuts, with short look-ahead only across a clear terrain path. Nearby
+vehicles influence spacing; a bot that stops making progress backs off,
+strafes and tries a jump. Routine random jumping is removed to preserve fuel.
+Bots engage visible nearby opponents without driving into the intervening
+terrain. They do not yet have a base-building strategy.
+
+The native movement check also records distance travelled, active engagements,
+and live bots that move less than 10 units in 10 seconds while not fighting.
+The Crossroads staging run with 64 bots and 16 simulated clients lasted five
+minutes: every bot travelled more than 2 km, with no late stalled bots. Its
+11 dropped ticks out of 7,489 are recorded rather than rounded down to zero.
 
 Large-match updates are split into datagrams of at most 1200 bytes. Every
 datagram includes the recipient's health, fuel and weapon state. The retail

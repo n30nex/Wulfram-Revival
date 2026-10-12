@@ -54,6 +54,12 @@ class BotSession:
     next_decision_at: float = 0.0
     next_jump_at: float = 0.0
     jump_release_at: float | None = None
+    progress_position: tuple[float,float,float] | None = None
+    progress_check_at: float = 0.0
+    recovery_until: float = 0.0
+    spawn_position: tuple[float,float,float] | None = None
+    furthest_travel: float = 0.0
+    engaging: bool = False
     rng: random.Random = field(default_factory=random.Random, repr=False)
 
 
@@ -64,6 +70,26 @@ class BotManager:
         self.server = server
         self._bots: list[BotSession] = []
         self._next_default_name = 1
+        self.navigation = None
+        self._navigation_revision = None
+
+    def prepare_navigation(self):
+        land = getattr(self.server,'land',None)
+        if land is None or not land.loaded: return
+        revision = (land.identity,land.revision)
+        if revision != self._navigation_revision:
+            from wulfram_server.navigation import TerrainRoutes
+            self.navigation = TerrainRoutes(land)
+            self._navigation_revision = revision
+        for team in (1,2):
+            self.navigation.field(self._route_goals(team))
+
+    def _route_goals(self, team):
+        bases = [entity for entity in self.server.entities.get_all()
+                 if entity.unit_type in (25,26,27,29,30) and entity.team_id == 3-team
+                 and entity.health_points > 0]
+        pads = [entity for entity in bases if entity.unit_type == REPAIR_PAD_UNIT_TYPE]
+        return [entity.pos for entity in (pads or bases)]
 
     @property
     def bots(self) -> tuple[BotSession, ...]:
@@ -186,8 +212,13 @@ class BotManager:
         bot.entity = entity
         bot.construction_ready_at = 0.0
         bot.next_decision_at = now
-        bot.next_jump_at = now + bot.rng.uniform(4.0, 9.0)
+        bot.next_jump_at = math.inf
         bot.jump_release_at = None
+        bot.spawn_position = spawn_pos
+        bot.progress_position = spawn_pos
+        bot.progress_check_at = now+3
+        bot.recovery_until = 0
+        bot.engaging = False
 
         from wulfram_server import application as app
 
@@ -228,8 +259,6 @@ class BotManager:
         entity = bot.entity
         if entity is None:
             return
-        # ponytail: direct pursuit can get stuck on terrain; add waypoints if
-        # real matches show jumping and steering cannot reach the other base.
         targets = [
             target for target in self.server.entities.get_all()
             if target.team_id in (1, 2) and target.team_id != bot.team
@@ -255,16 +284,54 @@ class BotManager:
 
         dx, dy, dz = (target.pos[index] - entity.pos[index] for index in range(3))
         distance = math.sqrt(dx * dx + dy * dy + dz * dz)
-        yaw_error = math.remainder(math.atan2(dy, dx) - entity.rot[2], math.tau)
+        combat = self.server.packet_cfg.combat
+        forward = _forward(entity.rot)
+        visible = False
+        if distance <= min(450.0,combat.autocannon_range):
+            origin = tuple(entity.pos[index]+forward[index]*4.5 for index in range(3))
+            hit = self.server.physics.trace_segment(origin,target.pos,ignored_entity=entity.net_id)
+            visible = bool(hit['hit']) and int(hit['entity_id']) == target.net_id
+        bot.engaging = visible
+        heading = (dx,dy)
+        routed = True
+        if not visible and self.navigation is not None:
+            waypoint = self.navigation.waypoint(entity.pos,self._route_goals(bot.team))
+            routed = waypoint is not None
+            if waypoint is not None:
+                heading = (waypoint[0]-entity.pos[0],waypoint[1]-entity.pos[1])
+                length = math.hypot(*heading)
+                if length > 1:
+                    vx,vy = heading[0]/length,heading[1]/length
+                    for other in self.server.entities.get_all():
+                        if other is entity or other.unit_type not in (0,1) or other.health_points <= 0: continue
+                        ax,ay = entity.pos[0]-other.pos[0],entity.pos[1]-other.pos[1]
+                        apart = math.hypot(ax,ay)
+                        if .01 < apart < 28:
+                            weight = .7*(28-apart)/28
+                            vx += weight*ax/apart; vy += weight*ay/apart
+                    probe = (entity.pos[0]+vx*30,entity.pos[1]+vy*30)
+                    if self.navigation.clear_line(entity.pos,probe): heading = (vx,vy)
+        yaw_error = math.remainder(math.atan2(heading[1],heading[0])-entity.rot[2],math.tau)
         # Raw turn channel 1 is negated by current_input_sample. Damp angular
         # velocity so the tank settles on a heading instead of circling it.
         turn = 2.0 * yaw_error - 1.5 * entity.spin[2]
         entity.actions[1] = -max(-1.0, min(1.0, turn))
-        entity.actions[6] = max(-0.5, min(0.5, -math.atan2(dz, math.hypot(dx, dy)) / 1.4137167))
-        combat = self.server.packet_cfg.combat
+        entity.actions[6] = (max(-0.5,min(0.5,-math.atan2(dz,math.hypot(dx,dy))/1.4137167))
+                             if visible else 0.0)
         stopping_distance = min(180.0, combat.autocannon_range * 0.5)
-        entity.actions[2] = 0.85 if abs(yaw_error) < 1.0 else 0.0
+        entity.actions[2] = 0.85 if routed and not visible and abs(yaw_error) < 1.0 else 0.0
         bot.next_decision_at = now + 0.2
+        if now >= bot.progress_check_at:
+            if (bot.progress_position is not None and entity.actions[2] > .2
+                    and math.dist(bot.progress_position[:2],entity.pos[:2]) < 8):
+                bot.recovery_until = now+1.2
+                bot.next_jump_at = now+.6
+            bot.progress_position = entity.pos
+            bot.progress_check_at = now+3
+        if now < bot.recovery_until:
+            entity.actions[2] = -.65
+            entity.actions[3] = .65 if bot.player_id%2 else -.65
+            return
         if distance <= 1.0e-6 or distance > combat.autocannon_range:
             return
 
@@ -286,6 +353,7 @@ class BotManager:
     def step(self, now: float) -> None:
         if getattr(self.server, "map_change_transition", None) is not None:
             return
+        self.prepare_navigation()
         for bot in tuple(self._bots):
             if bot.entity is None:
                 if now >= bot.construction_ready_at:
@@ -296,6 +364,8 @@ class BotManager:
                 continue
 
             entity = bot.entity
+            if bot.spawn_position is not None:
+                bot.furthest_travel = max(bot.furthest_travel,math.dist(entity.pos[:2],bot.spawn_position[:2]))
             changed = False
             if bot.jump_release_at is not None and now >= bot.jump_release_at:
                 entity.actions[4] = 0.0
@@ -309,7 +379,7 @@ class BotManager:
             if bot.jump_release_at is None and now >= bot.next_jump_at:
                 entity.actions[4] = 1.0
                 bot.jump_release_at = now + 0.12
-                bot.next_jump_at = now + bot.rng.uniform(5.0, 12.0)
+                bot.next_jump_at = math.inf
                 changed = True
 
             if changed:
