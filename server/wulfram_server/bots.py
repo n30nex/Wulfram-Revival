@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 import random
 import time
 from typing import Any
 
 from wulfram_server.core.entity import GameEntity
+from wulfram_server.core.combat import AUTOCANNON_ACTION, PULSE_ACTION, _forward
 from wulfram_server.network.packets import (
     AddToRosterPacket,
     BirthNoticePacket,
@@ -18,6 +20,7 @@ REPAIR_PAD_UNIT_TYPE = 27
 BOT_VEHICLE_UNIT_TYPE = 0
 BOT_NAME_LIMIT = 24
 BOT_SPAWN_HEIGHT_OFFSET = 15.0
+BOT_TARGET_UNIT_TYPES = frozenset((0, 1, 25, 26, 27, 29, 30))
 
 
 @dataclass
@@ -55,7 +58,7 @@ class BotSession:
 
 
 class BotManager:
-    """Owns bot roster entries, vehicles, and the initial wandering AI."""
+    """Owns CPU tanks which steer and fight through ordinary player controls."""
 
     def __init__(self, server: Any):
         self.server = server
@@ -86,18 +89,27 @@ class BotManager:
                 counts[team] += 1
         return 1 if counts[1] <= counts[2] else 2
 
-    def _spawn_pad(self, team: int) -> GameEntity | None:
+    def _spawn_pad(self, team: int, *, require_free: bool = False) -> GameEntity | None:
+        entities = self.server.entities.get_all()
         pads = sorted(
             (
                 entity
-                for entity in self.server.entities.get_all()
+                for entity in entities
                 if entity.unit_type == REPAIR_PAD_UNIT_TYPE
+                and entity.team_id == team
+                and entity.health_points > 0.0
             ),
             key=lambda entity: entity.net_id,
         )
-        matching = [pad for pad in pads if pad.team_id == team]
-        choices = matching or pads
-        return choices[0] if choices else None
+        for pad in pads:
+            spawn_pos = (pad.pos[0], pad.pos[1], pad.pos[2] + BOT_SPAWN_HEIGHT_OFFSET)
+            if not require_free or not any(
+                other.unit_type in (0, 1) and other.health_points > 0.0
+                and math.dist(other.pos, spawn_pos) < 20.0
+                for other in entities
+            ):
+                return pad
+        return None
 
     def can_spawn(self, team: int) -> bool:
         return self._spawn_pad(team) is not None
@@ -124,7 +136,7 @@ class BotManager:
         if len(self.server.sessions) >= limit:
             raise ValueError("the server player limit has been reached")
         if not self.can_spawn(team):
-            raise ValueError("the active map has no repair pad for bot spawning")
+            raise ValueError("the active map has no living repair pad for this bot's team")
 
         player_id = self.server.get_next_player_id()
         bot = BotSession(
@@ -153,7 +165,8 @@ class BotManager:
     def _spawn(self, bot: BotSession, now: float) -> bool:
         if getattr(self.server, "map_change_transition", None) is not None:
             return False
-        pad = self._spawn_pad(bot.team)
+        # Try every friendly pad before queuing an overlapping respawn.
+        pad = self._spawn_pad(bot.team, require_free=True)
         if pad is None:
             return False
 
@@ -211,7 +224,68 @@ class BotManager:
             print(f"[bot] removed player={bot.player_id} name={bot.name!r}")
         return targets
 
+    def _decide(self, bot: BotSession, now: float) -> None:
+        entity = bot.entity
+        if entity is None:
+            return
+        # ponytail: direct pursuit can get stuck on terrain; add waypoints if
+        # real matches show jumping and steering cannot reach the other base.
+        targets = [
+            target for target in self.server.entities.get_all()
+            if target.team_id in (1, 2) and target.team_id != bot.team
+            and target.unit_type in BOT_TARGET_UNIT_TYPES
+            and target.health_points > 0.0
+        ]
+        target = min(
+            targets,
+            key=lambda other: (math.dist(entity.pos, other.pos), other.net_id),
+            default=None,
+        )
+        entity.actions[AUTOCANNON_ACTION] = 0.0
+        previous_pulse = entity.actions.get(PULSE_ACTION, 0.0)
+        entity.actions[PULSE_ACTION] = 0.0
+        entity.actions[3] = 0.0
+        entity.actions[5] = 1.0
+        entity.actions[6] = 0.0
+        if target is None:
+            entity.actions[2] = bot.rng.uniform(0.55, 1.0)
+            entity.actions[1] = bot.rng.uniform(-0.65, 0.65)
+            bot.next_decision_at = now + bot.rng.uniform(1.5, 3.5)
+            return
+
+        dx, dy, dz = (target.pos[index] - entity.pos[index] for index in range(3))
+        distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+        yaw_error = math.remainder(math.atan2(dy, dx) - entity.rot[2], math.tau)
+        # Raw turn channel 1 is negated by current_input_sample. Damp angular
+        # velocity so the tank settles on a heading instead of circling it.
+        turn = 2.0 * yaw_error - 1.5 * entity.spin[2]
+        entity.actions[1] = -max(-1.0, min(1.0, turn))
+        entity.actions[6] = max(-0.5, min(0.5, -math.atan2(dz, math.hypot(dx, dy)) / 1.4137167))
+        combat = self.server.packet_cfg.combat
+        stopping_distance = min(180.0, combat.autocannon_range * 0.5)
+        entity.actions[2] = 0.85 if abs(yaw_error) < 1.0 else 0.0
+        bot.next_decision_at = now + 0.2
+        if distance <= 1.0e-6 or distance > combat.autocannon_range:
+            return
+
+        forward = _forward(entity.rot)
+        alignment = sum(forward[index] * (target.pos[index] - entity.pos[index]) for index in range(3)) / distance
+        if alignment < math.cos(math.radians(combat.autocannon_autoaim_degrees)):
+            return
+        origin = tuple(entity.pos[index] + forward[index] * 4.5 for index in range(3))
+        hit = self.server.physics.trace_segment(origin, target.pos, ignored_entity=entity.net_id)
+        if not hit["hit"] or int(hit["entity_id"]) != target.net_id:
+            return
+        if distance <= stopping_distance:
+            entity.actions[2] = 0.0
+        # Existing combat applies normal cooldowns, fuel cost, scatter and damage.
+        entity.actions[AUTOCANNON_ACTION] = 1.0
+        if not previous_pulse and distance < 250.0 and alignment > math.cos(math.radians(4.0)):
+            entity.actions[PULSE_ACTION] = 1.0
+
     def step(self, now: float) -> None:
+        if getattr(self.server, "map_change_transition", None) is not None:
+            return
         for bot in tuple(self._bots):
             if bot.entity is None:
                 if now >= bot.construction_ready_at:
@@ -229,14 +303,7 @@ class BotManager:
                 changed = True
 
             if now >= bot.next_decision_at:
-                # Keep the hover jets raised, drive forward, and occasionally
-                # change steering direction. This is intentionally wandering,
-                # not pathfinding.
-                entity.actions[2] = bot.rng.uniform(0.55, 1.0)
-                entity.actions[1] = bot.rng.uniform(-0.65, 0.65)
-                entity.actions[3] = bot.rng.uniform(-0.2, 0.2)
-                entity.actions[5] = 1.0
-                bot.next_decision_at = now + bot.rng.uniform(1.5, 3.5)
+                self._decide(bot, now)
                 changed = True
 
             if bot.jump_release_at is None and now >= bot.next_jump_at:

@@ -173,6 +173,20 @@ class ProductionHooks(ServerHooks):
 
     def start(self, server: Any) -> None:
         operations.prepare_operational_directories(server)
+        if server.cfg.game.bots_per_team:
+            from wulfram_server import application as app
+
+            if not app.load_map_state(server, server.current_map_name):
+                raise ValueError("could not load the initial bot map")
+            server.land.load(app.map_land_path(server, server.current_map_name))
+            if not server.land.loaded:
+                raise ValueError("could not load the initial bot terrain")
+            if not all(server.bots.can_spawn(team) for team in (1, 2)):
+                raise ValueError("startup bots require a living repair pad for each team")
+            server.first_map_load = True
+            for _ in range(server.cfg.game.bots_per_team):
+                for team in (1, 2):
+                    server.bots.add(team=team)
 
     def server_ready(self, server: Any) -> None:
         operations.write_runtime_status(server, "ready")

@@ -98,16 +98,36 @@ void TestAuthenticTankCollisionAsset() {
         "authentic Tank collision asset did not decode");
     Require(shape.vertices.size() == 19 && shape.triangles.size() == 29,
         "decoded Tank collision mesh does not match the recovered Wulfram II asset");
-    Require(shape.hierarchy.size() == 15,
+    Require(shape.hierarchy.size() == 15 || shape.hierarchy.size() == 16,
         "decoded Tank collision hierarchy does not match the recovered Wulfram II asset");
     Require(shape.hierarchy.front().negativeChild == 1 &&
             shape.hierarchy.front().positiveChild == -1 &&
             shape.hierarchy.front().triangles.size() == 2,
         "decoded Tank collision hierarchy root is incorrect");
-    Require(shape.hierarchy[3].positiveChild == 4 &&
-            shape.hierarchy[3].negativeChild == 6 &&
-            shape.hierarchy[4].triangles.front() == 18,
-        "decoded Tank hierarchy was not remapped to original runtime depth-first order");
+    if (shape.hierarchy.size() == 15) {
+        Require(shape.hierarchy[3].positiveChild == 4 &&
+                shape.hierarchy[3].negativeChild == 6 &&
+                shape.hierarchy[4].triangles.front() == 18,
+            "decoded Tank hierarchy was not remapped to original runtime depth-first order");
+    } else {
+        // Retail shapes2.zip tank_1_s (SHA-256
+        // 941ef3708c7c6b79fea4cdcc5d277f5153f04d9b6fc5b084475836b7c6aefb7b).
+        const std::vector<CollisionShape::HierarchyNode> retailHierarchy{
+            {{2, 3}, 1, -1}, {{4, 5, 6, 7}, 2, -1}, {{10, 11}, 3, -1},
+            {{12, 13}, 7, 4}, {{17}, 5, -1}, {{16}, 6, -1}, {{15}, -1, -1},
+            {{0, 1}, 8, -1}, {{14}, 14, 9}, {{8, 9}, 12, 10},
+            {{26}, 11, -1}, {{23}, -1, -1}, {{24, 25}, 13, -1},
+            {{27, 28}, -1, -1}, {{18, 19}, 15, -1}, {{20, 21, 22}, -1, -1},
+        };
+        for (std::size_t index = 0; index < retailHierarchy.size(); ++index) {
+            const auto& actual = shape.hierarchy[index];
+            const auto& expected = retailHierarchy[index];
+            Require(actual.positiveChild == expected.positiveChild &&
+                    actual.negativeChild == expected.negativeChild &&
+                    actual.triangles == expected.triangles,
+                "retail Tank hierarchy was not remapped to original runtime depth-first order");
+        }
+    }
     const auto& rootBounds = shape.hierarchy.front();
     Require(
         NearlyEqual(rootBounds.boundsCenter.x,
