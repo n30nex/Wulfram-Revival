@@ -83,11 +83,13 @@ class BotTests(unittest.TestCase):
         server.bots.step(102.0)
         self.assertEqual(bot.entity.actions[8], 0.0)
         self.assertEqual(bot.entity.actions[12], 0.0)
-        self.assertGreater(bot.entity.actions[2], 0.0)
+        self.assertTrue(bot.wants_move)
+        self.assertGreater(abs(bot.entity.actions[1])+abs(bot.entity.actions[2]), 0.0)
         server.physics.trace_segment.return_value = {"hit": True, "entity_id": 0}
         server.bots.step(103.0)
         self.assertEqual(bot.entity.actions[8], 0.0)
-        self.assertGreater(bot.entity.actions[2], 0.0)
+        self.assertTrue(bot.wants_move)
+        self.assertGreater(abs(bot.entity.actions[1])+abs(bot.entity.actions[2]), 0.0)
 
     def test_spawn_uses_another_free_pad_before_queuing(self):
         server = make_server()
@@ -121,6 +123,7 @@ class BotTests(unittest.TestCase):
         server = make_server()
         bot = server.bots.add(team=1)
         target = server.entities.create_entity(0, 2, (0.0, 200.0, 15.0))
+        server.physics.trace_segment.return_value = {"hit": True, "entity_id": target.net_id}
         bot.next_decision_at = 0.0
         server.bots.step(100.0)
         self.assertGreater(bot.entity.current_input_sample().controls.turn, 0.0)
@@ -182,7 +185,9 @@ class BotTests(unittest.TestCase):
         server.cfg = replace(server.cfg, game=replace(server.cfg.game, bots_per_team=2))
         server.current_map_name = "crossroads"
         server.content_root = Path("unused")
-        server.land = SimpleNamespace(load=Mock(), loaded=True)
+        server.land = SimpleNamespace(loaded=True, load=Mock(),identity='fixture',revision=1,
+                                      width=3,height=3,cell_size_x=250.,cell_size_y=250.,
+                                      heights=[[0.]*3 for _ in range(3)])
         server.first_map_load = False
         hooks = ProductionHooks(server.cfg, {"WULFRAM_SERVER_PASSWORD": "player", "WULFRAM_SERVER_ADMIN_PASSWORD": "admin"})
         with patch("wulfram_server.hooks.operations.prepare_operational_directories"), patch("wulfram_server.application.load_map_state", return_value=True):

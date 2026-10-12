@@ -85,9 +85,20 @@ reservation lock. An occupied human-selected pad falls back to the nearest
 living, unoccupied friendly pad, or returns a busy message if none is free.
 The Pi profile uses this configuration. CPU vehicles
 pursue enemy vehicles and bases, use the normal weapons/fuel/cooldown rules,
-and respawn from unoccupied living friendly pads. Navigation is direct pursuit
-with jumping, so difficult terrain can still strand them. These are basic
-combat opponents, without base-building strategy or route planning.
+and respawn from unoccupied living friendly pads. Teams share cached terrain
+distance fields toward enemy bases. Routes reject steep cells and diagonal
+corner cuts, with short look-ahead only across a clear terrain path. Nearby
+vehicles influence spacing; a bot that stops making progress backs off,
+strafes and tries a jump. Routine random jumping is removed to preserve fuel.
+Each 32-bot team assigns 12 assault vehicles, eight flankers, eight guards and
+four interceptors. Assault groups split between enemy structures and approach
+lanes; flankers pass through opposite staging areas before attacking. Guards
+patrol away from spawn pads and respond to enemy incursions, then resume their
+patrol. Interceptors reinforce threatened bases or join the attack. Bots keep
+their jobs across respawns and distribute spawns across available pads.
+They engage visible nearby opponents, try another target if the first is
+occluded, and space themselves around vehicles ahead. They do not yet build
+bases or coordinate cargo construction.
 
 ### Gameplay additions under client validation
 
@@ -131,6 +142,11 @@ The server writes an allowlisted `public.json` in its state directory every
 five seconds for a future player-page status feed. It contains match state,
 public callsigns and scores, with no addresses or credentials. A web exporter
 must copy only that file and treat stale timestamps as unavailable.
+The native movement check also records distance travelled, active engagements,
+and live bots that want to move but travel less than 10 units in 10 seconds.
+Patrolling, intentional holding and fighting are distinguished from stalls.
+It also saves role counts, concurrent goals and vehicle positions so route
+diversity can be checked against actual movement, not just assigned labels.
 
 Large-match updates are split into datagrams of at most 1200 bytes. Every
 datagram includes the recipient's health, fuel and weapon state. The retail

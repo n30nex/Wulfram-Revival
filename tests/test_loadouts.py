@@ -1,6 +1,7 @@
 from collections import Counter
 from dataclasses import replace
 import unittest
+from unittest.mock import Mock
 
 from test_bots import make_server
 from wulfram_server import admin_commands, application as app
@@ -8,6 +9,45 @@ from wulfram_server.core.combat import CombatSystem, REPAIR_ACTION, PIERCER_ACTI
 
 
 class LoadoutTests(unittest.TestCase):
+    def test_scout_routes_to_repair_ally_then_resumes_tactical_job(self):
+        server = make_server()
+        medic = server.bots.add(team=1,loadout='scout')
+        medic.progress_check_at = 200
+        ally = server.entities.create_entity(0,1,(300.,0.,15.))
+        ally.set_health_points(40)
+        server.bots.navigation = Mock()
+        server.bots.navigation.waypoint.return_value = (0.,100.)
+        server.bots._decide(medic,100)
+        self.assertEqual(medic.order,'support')
+        self.assertTrue(medic.wants_move)
+        self.assertEqual(medic.entity.actions[REPAIR_ACTION],0)
+        self.assertTrue(server.bots.navigation.waypoint.called)
+        ally.pos = (100.,0.,15.)
+        server.physics.trace_segment.return_value = {'hit':True,'entity_id':ally.net_id}
+        server.bots._decide(medic,101)
+        self.assertEqual(medic.entity.actions[REPAIR_ACTION],1)
+        self.assertEqual(medic.entity.actions[8],0)
+        ally.set_health_points(100)
+        server.bots.navigation = None
+        server.bots._decide(medic,102)
+        self.assertEqual(medic.order,'assault')
+
+    def test_low_resource_bot_uses_route_then_stops_within_pad_service_radius(self):
+        server = make_server()
+        bot = server.bots.add(team=1)
+        bot.entity.pos = (300.,0.,15.)
+        bot.entity.set_health_points(20)
+        bot.progress_check_at = 200
+        server.bots._decide(bot,100)
+        self.assertEqual(bot.order,'resupply')
+        self.assertEqual(bot.goal,(0.,0.))
+        bot.entity.pos = (10.,0.,15.)
+        server.bots._decide(bot,101)
+        self.assertFalse(bot.wants_move)
+        self.assertEqual(bot.entity.actions[2],0)
+        CombatSystem(server).step(.04)
+        self.assertGreater(bot.entity.health_points,20)
+
     def test_each_team_has_the_same_mixed_bot_roles(self):
         server = make_server()
         server.cfg = replace(server.cfg, game=replace(server.cfg.game, player_limit=80))

@@ -1,9 +1,11 @@
 """Exercise real bot spawning, native physics and combat without listening on a port."""
 from dataclasses import replace
+from collections import Counter, deque
 from pathlib import Path
 import argparse
 import contextlib
 import json
+import math
 import statistics
 import sys
 import tempfile
@@ -76,11 +78,32 @@ def main():
                 started, cpu_started = time.monotonic(), time.process_time()
 
                 def monitor():
+                    histories = {}
                     while time.monotonic() - started < args.seconds and not server.stop_update_event.wait(1):
                         live = sum(bot.is_bot and bot.entity is not None and bot.entity.is_manned for bot in server.bots.bots)
+                        stalled, engaging = 0, 0
+                        for bot in server.bots.bots:
+                            if not bot.is_bot: continue
+                            history = histories.setdefault(bot.player_id,deque(maxlen=11))
+                            entity = bot.entity
+                            if entity is None or not entity.is_manned:
+                                history.clear(); continue
+                            if history and history[-1][0] != entity.net_id: history.clear()
+                            history.append((entity.net_id,entity.pos[:2],bot.wants_move))
+                            engaging += bot.engaging
+                            if len(history)==11 and all(row[2] for row in history) and math.dist(history[0][1],history[-1][1])<10:
+                                stalled += 1
+                        active = [bot for bot in server.bots.bots if bot.is_bot and bot.entity is not None and bot.entity.is_manned]
                         samples.append({"seconds": round(time.monotonic() - started, 1), "live_bots": live,
                                         "entities": len(server.entities.get_all()), "ticks": server.physics.metrics.ticks,
-                                        "map": server.current_map_name})
+                                        "map": server.current_map_name,
+                                        "dropped_ticks":server.physics.metrics.dropped_catch_up_ticks,
+                                        "fields_built":server.bots.navigation.fields_built,
+                                        "stalled_bots":stalled,"engaging_bots":engaging,
+                                        "orders":dict(Counter(bot.order for bot in active)),
+                                        "unique_goals":len({bot.goal for bot in active if bot.goal is not None}),
+                                        "positions":[[bot.player_id,bot.team,bot.role,round(bot.entity.pos[0]),round(bot.entity.pos[1])]
+                                                     for bot in active]})
                     server.stop_update_event.set()
 
                 observer = threading.Thread(target=monitor, daemon=True)
@@ -104,12 +127,32 @@ def main():
                                     and metrics.dropped_catch_up_ticks <= max(1, metrics.ticks // 100)
                                     and traffic["max_update_bytes"] <= 1200
                                     and (not args.clients or traffic["datagrams"] > 0))
+                travel = [bot.furthest_travel for bot in server.bots.bots if bot.is_bot]
+                report["navigation"] = {
+                    "roles":dict(Counter(bot.role for bot in server.bots.bots if bot.is_bot)),
+                    "peak_unique_goals":max((s['unique_goals'] for s in samples),default=0),
+                    "fields_built":server.bots.navigation.fields_built,
+                    "final_bots":[{"id":bot.player_id,"team":bot.team,"role":bot.role,"order":bot.order,
+                                  "goal":bot.goal,"position":bot.entity.pos,"engaging":bot.engaging,
+                                  "wants_move":bot.wants_move,"health":bot.entity.health_points}
+                                 for bot in server.bots.bots if bot.is_bot and bot.entity is not None],
+                    "bots_past_1km":sum(distance >= 1000 for distance in travel),
+                    "median_travel":round(statistics.median(travel),1),
+                    "maximum_travel":round(max(travel),1),
+                    "minimum_travel":round(min(travel),1),
+                    "late_peak_stalled":max((s['stalled_bots'] for s in samples if s['seconds']>=60),default=0),
+                    "final_stalled":samples[-1]['stalled_bots'] if samples else None,
+                    "peak_engaging":max((s['engaging_bots'] for s in samples),default=0),
+                    "by_team": {str(team):[round(bot.furthest_travel,1) for bot in server.bots.bots
+                                           if bot.is_bot and bot.team==team] for team in (1,2)}}
             finally:
                 server.stop_update_event.set()
                 server.tcp_sock.close()
                 server.udp_sock.close()
         args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        print(json.dumps({key: value for key, value in report.items() if key != "samples"}, indent=2))
+        summary = {key:value for key,value in report.items() if key != "samples"}
+        summary['navigation'] = {key:value for key,value in report['navigation'].items() if key not in ('final_bots','by_team')}
+        print(json.dumps(summary, indent=2))
         return 0 if report["passed"] else 1
 
 
