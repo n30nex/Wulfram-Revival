@@ -45,6 +45,18 @@ def main():
         hooks = ProductionHooks(cfg, {"WULFRAM_SERVER_PASSWORD": "benchmark-player",
                                      "WULFRAM_SERVER_ADMIN_PASSWORD": "benchmark-admin"})
         samples, step_seconds = [], []
+        phase_times = {}
+
+        def measure(owner, attribute, name):
+            original = getattr(owner,attribute)
+            durations = phase_times.setdefault(name,[])
+            def timed(*args,**kwargs):
+                began = time.perf_counter()
+                try:
+                    return original(*args,**kwargs)
+                finally:
+                    durations.append(time.perf_counter()-began)
+            setattr(owner,attribute,timed)
         traffic = {"datagrams": 0, "bytes": 0, "max_update_bytes": 0}
 
         def receive_packet(packet, session=None):
@@ -62,6 +74,11 @@ def main():
                 str(args.content_root / "packets.toml"), strict=True), content_root=args.content_root, hooks=hooks)
             try:
                 hooks.start(server)
+                measure(server.bots,'step','bots')
+                measure(server.bots.navigation,'field','routes')
+                measure(server.combat,'step','combat')
+                measure(server.physics,'trace_segment','traces')
+                measure(app,'_broadcast_dirty_state','broadcast')
                 for index in range(args.clients):
                     client = server.bots.add(name=f"LoadClient{index+1}")
                     client.is_bot = False
@@ -122,6 +139,9 @@ def main():
                           "physics_step_mean_ms": round(1000 * statistics.mean(ordered), 3) if ordered else None,
                           "samples": samples}
                 report["maps_seen"] = sorted({sample["map"] for sample in samples})
+                report['phases'] = {name:{'calls':len(values),'seconds':round(sum(values),3),
+                                         'max_ms':round(max(values,default=0)*1000,3)}
+                                    for name,values in phase_times.items()}
                 report["passed"] = (report["bots"] == args.bots and metrics.ticks >= .95 * args.seconds * 25
                                     and report["peak_live_bots"] == args.bots
                                     and metrics.dropped_catch_up_ticks <= max(1, metrics.ticks // 100)

@@ -463,7 +463,8 @@ class BotManager:
         stopping_distance = min(180.0, combat.autocannon_range * 0.5)
         entity.actions[2] = speed if routed and not visible and abs(yaw_error) < 1.0 else 0.0
         bot.wants_move = bool(wants_move and not visible)
-        bot.next_decision_at = now + 0.2
+        # Keep 80 decision timers from collapsing onto the same physics frame.
+        bot.next_decision_at = now + bot.rng.uniform(.18,.22)
         if now >= bot.progress_check_at:
             if (bot.progress_position is not None and bot.wants_move
                     and math.dist(bot.progress_position[:2],entity.pos[:2]) < 8):
