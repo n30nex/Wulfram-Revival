@@ -35,9 +35,9 @@ def generate(destination: Path):
             tile = 1 if road else 2 if z > 90 else 0
             land.append(f"{tile} {z:.6f}")
     (destination / "land").write_text("\n".join(land) + "\n", encoding="ascii", newline="\n")
-    # Rule values are XORed with 15 by the retail parser: zero fills all corners.
+    # Use the retail plain-name form for these solid terrain materials.
     textures = ("4sand001", "Bdt001", "canyon003")
-    (destination / "tagmap2").write_text("".join(f"+0template {name} 0 \n" for name in textures), encoding="ascii", newline="\n")
+    (destination / "tagmap2").write_text("\n".join(textures)+"\n", encoding="ascii", newline="\n")
     (destination / "tagmap").write_text("".join(f"{i}:{name}\n" for i, name in enumerate(textures)), encoding="ascii", newline="\n")
     (destination / "start_script").write_text('sky_names "sunset"\nmap_name "Canadaverse Frontier"\n', encoding="ascii", newline="\n")
     state = ["# Canadaverse Frontier: original map, eight repair pads per team."]
