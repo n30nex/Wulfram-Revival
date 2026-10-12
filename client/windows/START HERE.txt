@@ -54,6 +54,11 @@ This is a community alpha, not an official remaster. Windows is the initial
 supported client. Report your display resolution, Windows scaling and the exact
 problem at https://github.com/n30nex/Wulfram-Revival/issues
 
+Legacy squad services and persistent account ranks are not included. Your Stats
+shows the current round; Overall shows this connection and resets on reconnect.
+The original Units Info pages describe some equipment not yet implemented by
+the revival server. Use the vehicle and weapon guide above for this release.
+
 CREDITS AND SOURCE
 Original Wulfram creators and the Wulfram preservation community.
 https://github.com/baffler/Wulf-Forge
