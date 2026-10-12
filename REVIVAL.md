@@ -156,11 +156,29 @@ python scripts/benchmark-bots.py --content-root /path/to/content --bots 64 --cli
 The Windows display launcher under `client/windows/` is an experimental retail
 client patch. It verifies the executable hash and patches only a newly created,
 suspended process, leaving the original executable unchanged. Native widescreen
-gameplay and menu clicking have been exercised, but HUD, login and map layout
-work remains. F12 capture is repaired by converting the renderer's RGB24
+gameplay and menu clicking have been exercised. Menus now retain a centered
+640x480 canvas while gameplay uses the full widescreen viewport. Custom map
+and polygon-button hit tests use the same menu origin; the map's texture
+readback uses the full framebuffer. UI proportions stay consistent from HD
+through 4K layout requests. Physical 4K output and the final packaged client
+still need testing. F12 capture is repaired by converting the renderer's RGB24
 readback to RGB565 before the original BMP writer; `--self-test` checks the
 conversion, and a real login-screen capture has been verified. It is not yet
 the public client package.
+
+`scripts/client-lab.py` prepares an isolated client from the verified baseline
+archive and records each exact child process, creation time, executable hash,
+display helper hash, layout and screenshots. Its optional in-engine test
+bridge dispatches real menu events and checks resulting team/map/spawn state;
+it refuses authentication-dialog clicks and unrelated processes. It also
+checks map pixels, catching a blank/clipped map even when geometry looks valid.
+Use `--root <new-lab> prepare --archive <verified-zip>`, then `--root <lab> start
+--launcher <Actions-helper> --resolution 1920x1080 --scene login`. For the
+non-authentication menu journey use `--scene teams` with the test server's
+player credential supplied in `WULFRAM_LAB_PASSWORD`. Save and reuse the
+reported run directory for `inspect`, `capture`, `click` and `stop`. A scene
+timeout leaves that recorded child intact for diagnosis; do not relaunch it
+blindly. Do not commit lab copies, screenshots, credentials or runtime logs.
 
 ## Public connection
 
