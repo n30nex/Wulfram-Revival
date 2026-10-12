@@ -466,7 +466,7 @@ class WulframServerContext:
                     self.stop_event.set()
                     break
                 for session in list(self.sessions):
-                    if isinstance(session, ClientSession) and now - session.last_received_at > 60.0:
+                    if isinstance(session, ClientSession) and now - session.last_received_at > (60.0 if session.is_logged_in else 150.0):
                         session.disconnect()
                 if self.hooks.shutdown_requested(self):
                     self.stop_event.set()
@@ -2765,7 +2765,9 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
     # --- Login Flow ---
     print(">>> Waiting for username (LOGIN 0x21)...")
     
-    login_deadline = time.monotonic() + 30.0
+    # Allow a new player time to read the guide and enter a callsign. The
+    # absolute deadline and pending-connection limits still bound idle peers.
+    login_deadline = time.monotonic() + 120.0
     
     # Wait for the login_received event (triggered by on_login_request)
     while not ctx.session.login_received.is_set():
