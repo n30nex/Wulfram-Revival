@@ -100,15 +100,17 @@ They engage visible nearby opponents, try another target if the first is
 occluded, and space themselves around vehicles ahead. They do not yet build
 bases or coordinate cargo construction.
 
-### Gameplay additions under client validation
+### Released gameplay additions
 
 The current branch adds real kill/death counters, team points and timed rounds.
 Destroying an enemy vehicle earns one point, a base structure earns three,
 and a Scout earns one point for each 100 health repaired. Eliminating the
 opposing team's survival resources still wins; a timed round otherwise uses
 team points, with ties recorded as draws. The Pi profile uses 20-minute rounds
-and Crossroads/Mayhem rotation. `/s score` and `/s status` are available to
-players. Session kill/death totals survive map changes; round scores reset.
+and ordered Crossroads/Mayhem/Frontier rotation. `/s score` and `/s status`
+are available to players. The native Your Stats page receives real round and
+connection statistics. Session kill/death totals survive map changes; round
+scores reset, and connection totals reset on reconnect.
 
 Each 32-bot team uses 20 Tanks, eight Support Scouts and four Siege loadouts.
 Scouts use a machine gun and a fuel/charge-limited friendly repair beam.
@@ -132,16 +134,19 @@ Its three approaches, eight pads per team and midfield construction cargo use
 the preserved client's existing textures and models. Copy the generated
 `shared/data/maps/frontier` directory to both server and client before adding
 `frontier` to rotation. The generator refuses to overwrite an existing map.
-Its client rendering remains a release gate.
+The packaged client has been checked with Frontier's terrain preview, 3D world
+and Scout deployment. Solid materials use the retail tagmap2 plain-name format.
 
 With the client closed, `scripts/prepare-controls.ps1 -ClientDir <path>` applies
 WASD movement, Q/E turning and Space jump while preserving the mouse and arrow
 controls. `-Preset classic` restores the saved original vehicle keymaps.
 
-The server writes an allowlisted `public.json` in its state directory every
-five seconds for a future player-page status feed. It contains match state,
-public callsigns and scores, with no addresses or credentials. A web exporter
-must copy only that file and treat stale timestamps as unavailable.
+The server writes `public.json` in its private state directory every five
+seconds. `scripts/publish-status.py` exports only the match counters needed by
+the player page, omitting player names, addresses and credentials. The supplied
+systemd timer refreshes that public file, and the page treats timestamps older
+than 30 seconds as unavailable. The public guide and verified download are at
+https://canadaverse.org/wulfram/ . `release.json` identifies the exact ZIP and SHA-256.
 The native movement check also records distance travelled, active engagements,
 and live bots that want to move but travel less than 10 units in 10 seconds.
 Patrolling, intentional holding and fighting are distinguished from stalls.
@@ -176,18 +181,24 @@ gameplay and menu clicking have been exercised. Menus now retain a centered
 640x480 canvas while gameplay uses the full widescreen viewport. Custom map
 and polygon-button hit tests use the same menu origin; the map's texture
 readback uses the full framebuffer. UI proportions stay consistent from HD
-through 4K layout requests. Physical 4K output and the final packaged client
-still need testing. F12 capture is repaired by converting the renderer's RGB24
+through 4K layout requests. Native 1920x1080 render targets and full-screen
+presentation were confirmed in the graphics-wrapper trace; 1440p and 4K
+layout requests were checked, but physical 4K hardware was not available.
+Mouse coordinates are clamped to the full screen, and both cursor drawing
+paths compensate for the menu origin. The Units Info preview panes use that
+origin too. F12 capture is repaired by converting the renderer's RGB24
 readback to RGB565 before the original BMP writer; `--self-test` checks the
-conversion, and a real login-screen capture has been verified. It is not yet
-the public client package.
+conversion and checks that hook emission preserves caller buffers. The
+Actions-built helper is included in the public 0.4.0-alpha1 Windows package.
 
 `scripts/client-lab.py` prepares an isolated client from the verified baseline
 archive and records each exact child process, creation time, executable hash,
 display helper hash, layout and screenshots. Its optional in-engine test
-bridge dispatches real menu events and checks resulting team/map/spawn state;
+bridge exercises the real Windows mouse-coordinate clamp, dispatches menu
+events and checks resulting team/map/spawn state;
 it refuses authentication-dialog clicks and unrelated processes. It also
-checks map pixels, catching a blank/clipped map even when geometry looks valid.
+checks map and cursor pixels, catching blank terrain or a pointer drawn away
+from its input position even when widget geometry looks valid.
 Use `--root <new-lab> prepare --archive <verified-zip>`, then `--root <lab> start
 --launcher <Actions-helper> --resolution 1920x1080 --scene login`. For the
 non-authentication menu journey use `--scene teams` with the test server's
@@ -195,6 +206,21 @@ player credential supplied in `WULFRAM_LAB_PASSWORD`. Save and reuse the
 reported run directory for `inspect`, `capture`, `click` and `stop`. A scene
 timeout leaves that recorded child intact for diagnosis; do not relaunch it
 blindly. Do not commit lab copies, screenshots, credentials or runtime logs.
+
+`scripts/package-client.py` verifies the baseline archive and exact Actions
+helper, prepares a clean portable folder, adds Frontier and reversible
+Settings.cmd presets, and verifies every file in the resulting ZIP. Pass the
+published ZIP checksum to the lab's `prepare --sha256` option to test a fresh
+extraction. No developer runtime is needed to play the packaged game.
+
+Release verification included 43 Python tests, Windows/x64/ARM64 CI, the
+asset-dependent native binding tests, a five-minute 64-bot/16-simulated-client
+run, and a six-minute three-map rotation. The load runs recorded 65 dropped
+ticks out of 7,435 and 47 out of 8,955 respectively, with no bots stalled at
+their ends. Public TCP/UDP login, team capacity, full-health spawning and
+owner vitals were checked from an external host. The public ZIP was downloaded
+there in full and its SHA-256 matched. The real packaged Windows client joined
+the public 64-bot match and survived a round change before deploying on Mayhem.
 
 ## Public connection
 
@@ -236,6 +262,10 @@ installation is changed by preparation.
 
 The CI builds the native core/bindings and checks CPU-player logic without
 redistributing game assets. Asset-dependent physics tests run on the Pi.
-Deployment rollback is `systemctl disable --now wulfram.service`, retaining
-the source, content and state directories for recovery. Disable the named
-Wulfram router rule and remove its DNS record to withdraw public access.
+The 0.4.0-alpha1 deployment retains the previous source, native binding,
+configuration and website route. Its guarded recovery script is
+`/opt/canadaverse/wulfram/backups/20261012-public-105646f/rollback.sh` on the Pi.
+It restores the previous game release and Caddy configuration and disables
+only the Wulfram status timer. Check the recorded deployment identities before
+using it; do not overwrite unrelated later website changes. The public game
+hostname and its TCP/UDP router forwarding were preserved by the deployment.
