@@ -9,6 +9,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import sysconfig
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -48,7 +49,7 @@ def main():
     for name in ('gameplay.toml','packets.toml'):
         shutil.copy2(ROOT/'server/wulfram_server/content'/name,output/'content'/name)
     (output/'bin').mkdir()
-    shutil.copy2(args.native,output/'bin'/args.native.name)
+    shutil.copy2(args.native,output/'bin'/('_wulfram_physics'+sysconfig.get_config_var('EXT_SUFFIX')))
     entries=[{'path':p.relative_to(output).as_posix(),'size':p.stat().st_size,'sha256':digest(p)}
              for p in sorted(output.rglob('*')) if p.is_file()]
     content_entries=[entry for entry in entries if entry['path'].startswith('content/')]
