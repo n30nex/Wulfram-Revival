@@ -224,6 +224,8 @@ class UpdateArrayPacket:
 
         # --- SECTION 2: Entity Loop ---
         count = len(self.entities)
+        if count > 255:
+            raise ValueError("UPDATE_ARRAY can contain at most 255 entities; split the snapshot")
         
         # Total Entity Count (8 bits)
         self.writer.write_bits(count, 8)

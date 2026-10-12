@@ -593,6 +593,38 @@ void TestJumpCanUseAnotherBodyAsProbeSupport() {
         "nearby body collision mesh was not accepted as jump-probe support");
 }
 
+void TestHoverProbeGeometryRefreshesAfterSupportMoves() {
+    PhysicsConfig config = DefaultPhysicsConfig();
+    config.tank.gravityMagnitude = 0.0;
+    World world(config, LevelTerrain(-100.0F));
+    EntityDefinition support = TankDefinition(1, {15.0F, 15.0F, 10.0F}, BoxShape({10.0F, 10.0F, 1.0F}));
+    support.initialState.eulerRadians = {0.15F, 0.25F, 0.2F};
+    support.initialState.orientation = Matrix3d::FromEulerAngles(support.initialState.eulerRadians);
+    Require(world.CreateEntity(support), "could not create tilted hover support");
+    EntityDefinition hover = TankDefinition(2, {15.0F, 15.0F, 30.0F});
+    hover.initialInput.jet = 0.8F;
+    Require(world.CreateEntity(hover), "could not create hovering Tank");
+    Require(world.StepWorld(1, 0), "initial hover probe step failed");
+    int supported = 0;
+    for (const TraceEvent& event : world.DrainTraceEvents()) {
+        if (event.type == TraceEventType::Probe && event.entity == 2) {
+            Require(event.value.z > 0.0F, "rotated support was missed by a hover probe");
+            ++supported;
+        }
+    }
+    Require(supported == 4, "expected all four support probes");
+    world.GetBodyState(1)->position.x += 1000.0F;
+    Require(world.StepWorld(2, 0), "moved-support probe step failed");
+    int terrain = 0;
+    for (const TraceEvent& event : world.DrainTraceEvents()) {
+        if (event.type == TraceEventType::Probe && event.entity == 2) {
+            Require(NearlyEqual(event.value.z, -100.0F), "hover probe reused stale support geometry");
+            ++terrain;
+        }
+    }
+    Require(terrain == 4, "expected all four terrain fallback probes");
+}
+
 void TestJumpRejectsMissingSupportAndInsufficientFuel() {
     PhysicsConfig config = DefaultPhysicsConfig();
     config.tank.gravityMagnitude = 0.0;
@@ -864,6 +896,7 @@ int main() {
     TestJumpSupportUsesConfiguredHoverRange();
     TestJumpUsesOrientationAndUnevenProbeSupport();
     TestJumpCanUseAnotherBodyAsProbeSupport();
+    TestHoverProbeGeometryRefreshesAfterSupportMoves();
     TestJumpRejectsMissingSupportAndInsufficientFuel();
     TestFuelRegenerationIsTimeBasedAndCapped();
     TestSweptTerrainContact();

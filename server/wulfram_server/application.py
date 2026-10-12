@@ -747,7 +747,7 @@ def send_existing_player_entity_definitions(ctx: TcpContext | UdpContext, reason
         | UpdateMask.OWNER
     )
     local_stats = _local_stats(session.entity)
-    payload = ctx.server.entities.build_forced_update_packet(
+    payloads = ctx.server.entities.build_forced_update_packets(
         entities,
         sequence_num=get_ticks(),
         is_view_update=False,
@@ -756,10 +756,8 @@ def send_existing_player_entity_definitions(ctx: TcpContext | UdpContext, reason
         force_spawn=True,
         viewer_team=session.team,
     )
-    if not payload:
-        return False
-
-    target_ctx.send(b"\x0E" + payload)
+    for payload in payloads:
+        target_ctx.send(b"\x0E" + payload)
     for other_session in ctx.server.sessions:
         if getattr(other_session, "carried_cargo_item_id", None) is None:
             continue
@@ -1321,6 +1319,13 @@ def _broadcast_dirty_state(
     dirty_entities = server.entities.get_dirty_entities()
     view_dirty_entities = server.entities.get_view_dirty_entities()
     current_tick = get_ticks()
+    network_owners = {
+        session.entity.net_id for session in server.sessions
+        if session.entity is not None and getattr(session, "udp_context", None)
+    }
+    common_dirty = [entity for entity in dirty_entities if entity.net_id not in network_owners]
+    player_dirty = [entity for entity in dirty_entities if entity.net_id in network_owners]
+    shared_updates = {}
 
     if (send_update_arrays and dirty_entities) or (send_view_updates and view_dirty_entities):
         for session in server.sessions:
@@ -1331,16 +1336,25 @@ def _broadcast_dirty_state(
 
             my_entity = session.entity
             my_stats = _local_stats(my_entity)
-            others = [e for e in dirty_entities if e.net_id != my_entity.net_id]
-            if send_update_arrays and others:
-                payload = server.entities.build_update_packet(
+            others = [e for e in player_dirty if e.net_id != my_entity.net_id]
+            if send_update_arrays and dirty_entities:
+                # Bots and world objects have identical updates for every
+                # viewer on a team. Encode those once, retaining cargo secrecy
+                # across teams and keeping owner corrections out of the batch.
+                team = getattr(session, "team", None)
+                if team not in shared_updates:
+                    shared_updates[team] = list(server.entities.build_update_packets(
+                        common_dirty, sequence_num=current_tick, is_view_update=False, viewer_team=team))
+                for payload in shared_updates[team]:
+                    session.udp_context.send(b'\x0E' + payload)
+                payloads = server.entities.build_update_packets(
                     others,
                     sequence_num=current_tick,
                     is_view_update=False,
                     local_stats=my_stats,
                     viewer_team=getattr(session, "team", None),
                 )
-                if payload:
+                for payload in payloads:
                     session.udp_context.send(b'\x0E' + payload)
                     if any(e.pending_mask & UpdateMask.HARD_SYNC for e in others):
                         now = time.monotonic()
@@ -1719,14 +1733,15 @@ def on_want_updates(ctx: TcpContext, payload: bytes):
                 message="To spawn in type /s spawn"
             ))
     # SEND FULL WORLD SNAPSHOT
-    snapshot = ctx.server.entities.get_snapshot_packet(
+    snapshots = ctx.server.entities.get_snapshot_packets(
         sequence_num=get_ticks(),
         health=1.0,
         energy=1.0,
         viewer_team=ctx.session.team,
     )
     # We send this over TCP to ensure they get the initial world state reliably
-    ctx.send(snapshot)
+    for snapshot in snapshots:
+        ctx.send(snapshot)
 
     ctx.session.is_ready_for_updates = True
     ctx.server.trace.state("WORLD_SYNCED", player=ctx.session.player_id)

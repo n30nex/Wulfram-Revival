@@ -111,54 +111,44 @@ static void emit_offset(unsigned char *code, size_t *n, int x, int y, int root) 
     memcpy(code+*n,tail,sizeof(tail)); *n+=sizeof(tail);
 }
 
-static int fix_ui(HANDLE process, int width, int height) {
-    /* Keep the original 640x480 UI canvas, centered horizontally and bottom
-       aligned. Apply the same translation to its preview panes and input. */
+static int fix_cockpit(HANDLE process, int width, int height) {
+    /* Translate only the non-interactive cockpit artwork. The menu canvas,
+       map selectors and mouse coordinates stay in the same screen space. */
     int x=(width-640)/2, y=height-480;
     unsigned char code[128]; size_t n=0;
-    static const unsigned char root_tail[]={0x5d,0x5b,0x59,0xc3,0x8d,0x49,0x00};
+    static const unsigned char original[]={0xe8,0x54,0x29,0xfe,0xff};
     emit_offset(code,&n,x,y,1);
-    memcpy(code+n,root_tail,4); n+=4;
-    if (!hook(process,0x0045ecd5,root_tail,sizeof(root_tail),code,n,0)) return 0;
-
-    static const struct {
-        uintptr_t address;
-        unsigned char size;
-        unsigned char original[9];
-    } panes[]={
-        {0x0045e92c,9,{0x89,0x58,0x18,0x89,0x50,0x20,0x89,0x48,0x28}},
-        {0x0045e9b7,6,{0x89,0x50,0x20,0x89,0x48,0x28}},
-        {0x0045ea77,6,{0x89,0x50,0x20,0x89,0x48,0x28}},
-        {0x0045ea10,7,{0xc7,0x40,0x28,0x64,0x00,0x00,0x00}}
-    };
-    for (size_t i=0;i<sizeof(panes)/sizeof(panes[0]);++i) {
-        n=panes[i].size; memcpy(code,panes[i].original,n);
-        emit_offset(code,&n,x,y,0);
-        if (!hook(process,panes[i].address,panes[i].original,panes[i].size,
-                  code,n,panes[i].address+panes[i].size)) return 0;
-    }
-    static const unsigned char mouse_original[]={0xc6,0x45,0xf3,0x00,0x8b,0x0d,0xac,0x56,0x5f,0x00};
-    const unsigned char mouse_x[]={0x8b,0x4d,0xf8,0x81,0xe9};
-    memcpy(code,mouse_x,sizeof(mouse_x)); n=sizeof(mouse_x); put32(code,&n,(uint32_t)x);
-    code[n++]=0x89; code[n++]=0x0d; put32(code,&n,0x00677d18);
-    const unsigned char mouse_y[]={0x8b,0x55,0xfc,0x81,0xea};
-    memcpy(code+n,mouse_y,sizeof(mouse_y)); n+=sizeof(mouse_y); put32(code,&n,(uint32_t)y);
-    code[n++]=0x89; code[n++]=0x15; put32(code,&n,0x00677104);
-    return hook(process,0x004b89ee,mouse_original,sizeof(mouse_original),code,n,0x004b8a7b);
+    code[n++]=0xb8; put32(code,&n,0x00424620); code[n++]=0xff; code[n++]=0xd0;
+    emit_offset(code,&n,-x,-y,1);
+    if (!hook(process,0x00441cc7,original,sizeof(original),code,n,0x00441ccc)) return 0;
+    /* The health/fuel meters belong to the top edge, unlike the cockpit. */
+    static const unsigned char meter_call[]={0xe8,0xce,0xc5,0x02,0x00};
+    n=0;
+    emit_offset(code,&n,0,-y,1);
+    code[n++]=0xb8; put32(code,&n,0x00450c40); code[n++]=0xff; code[n++]=0xd0;
+    emit_offset(code,&n,0,y,1);
+    return hook(process,0x0042466d,meter_call,sizeof(meter_call),code,n,0x00424672);
 }
 
 static int patch_display(HANDLE process, int width, int height) {
     const int old_width=640, old_height=480;
     const int old_scene[2]={640,360}, scene[2]={width,height-120};
+    const int old_full[2]={640,480}, full[2]={width,height};
     const int old_radar[2]={3,346}, radar[2]={3+(width-640)/2,height-134};
     const int old_secondary[2]={533,366}, secondary[2]={533+(width-640)/2,height-114};
+    const int old_console_min[2]={142,358}, console_min[2]={142+(width-640)/2,height-122};
+    const int old_console_max[2]={510,458}, console_max[2]={510+(width-640)/2,height-22};
     return patch(process,0x004a8137,&old_width,&width,4)
         && patch(process,0x004a813e,&old_height,&height,4)
         && patch(process,0x00577a20,old_scene,scene,8)
+        && patch(process,0x00577ac0,old_full,full,8)
+        && patch(process,0x00577ac8,old_full,full,8)
         && patch(process,0x00577a40,old_radar,radar,8)
         && patch(process,0x00577a80,old_secondary,secondary,8)
+        && patch(process,0x00577ae0,old_console_min,console_min,8)
+        && patch(process,0x00577b00,old_console_max,console_max,8)
         && fix_projection(process,width,height)
-        && fix_ui(process,width,height);
+        && fix_cockpit(process,width,height);
 }
 
 int wmain(int argc, wchar_t **argv) {
@@ -176,7 +166,8 @@ int wmain(int argc, wchar_t **argv) {
     if (physical_width<800 || physical_width>7680
         || physical_height<600 || physical_height>4320) return 2;
     int ui_scale=(int)(physical_height+719)/720;
-    while (ui_scale>1 && (physical_height/ui_scale<480 || physical_width%ui_scale || physical_height%ui_scale)) --ui_scale;
+    while (ui_scale>1 && (physical_height/ui_scale<480 || physical_width/ui_scale<640
+           || physical_width%ui_scale || physical_height%ui_scale)) --ui_scale;
     int width=(int)physical_width/ui_scale, height=(int)physical_height/ui_scale;
     const wchar_t *server=argc==5 ? argv[4] : L"wulfram.canadaverse.org";
     if (!*server || wcslen(server)>253 || wcsspn(server,L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")!=wcslen(server)) return 2;

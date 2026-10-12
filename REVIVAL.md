@@ -77,11 +77,33 @@ to your host. Store distinct player/admin credentials in the root-readable
 `/etc/wulfram/server.env`; do not commit credentials. Keep assets under
 `/opt/canadaverse/wulfram/content`, with a source checkout at `current`.
 
-`bots_per_team = 2` starts four CPU players and reserves human slots. CPU tanks
+`bots_per_team = 32` starts 64 CPU players; `player_limit = 80` leaves 16 human
+slots. The Pi profile uses this configuration. CPU tanks
 pursue enemy vehicles and bases, use the normal weapons/fuel/cooldown rules,
 and respawn from unoccupied living friendly pads. Navigation is direct pursuit
 with jumping, so difficult terrain can still strand them. These are basic
 combat opponents, without base-building strategy or route planning.
+
+Large-match updates are split into datagrams of at most 1200 bytes. Each team
+shares the encoded bot/world updates, while player poses and vital statistics
+remain specific to the recipient. Enemy cargo contents remain concealed.
+Hover-support geometry is transformed once per physics tick and uses conservative
+bounds before the original triangle tests. No physics tick rate is reduced.
+
+The reproducible load check runs native physics and combat without opening a
+listening port. Optional simulated clients exercise snapshot serialization with
+bot-driven vehicles and an in-memory transport; this does not replace a real
+client or public-network test:
+
+```text
+python scripts/benchmark-bots.py --content-root /path/to/content --bots 64 --clients 16 --seconds 120 --output /tmp/wulfram-load.json
+```
+
+The Windows display launcher under `client/windows/` is an experimental retail
+client patch. It verifies the executable hash and patches only a newly created,
+suspended process, leaving the original executable unchanged. Native widescreen
+gameplay and menu clicking have been exercised, but HUD, login and map layout
+work remains. It is not yet the public client package.
 
 ## Public connection
 

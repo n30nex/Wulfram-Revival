@@ -310,9 +310,9 @@ class Config:
 
         tcp_port = _integer(network, "tcp_port", "[network]", minimum=1, maximum=65535)
         udp_port = _integer(network, "udp_port", "[network]", minimum=1, maximum=65535)
-        player_limit = _integer(server, "player_limit", "[server]", minimum=1, maximum=64)
+        player_limit = _integer(server, "player_limit", "[server]", minimum=1, maximum=128)
         bots_per_team = (
-            _integer(server, "bots_per_team", "[server]", minimum=0, maximum=31)
+            _integer(server, "bots_per_team", "[server]", minimum=0, maximum=32)
             if "bots_per_team" in server else 0
         )
         if 2 * bots_per_team >= player_limit:

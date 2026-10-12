@@ -122,6 +122,20 @@ class BotTests(unittest.TestCase):
                 path.write_text(example.replace("bots_per_team = 0", f"bots_per_team = {value}"))
                 with self.assertRaises(ConfigurationError):
                     Config.load_strict(path, gameplay_filename=gameplay, environment=environment)
+            # A 64-CPU match needs additional slots for actual players.
+            large_match = example.replace("player_limit = 20", "player_limit = 80").replace(
+                "bots_per_team = 0", "bots_per_team = 32")
+            path.write_text(large_match)
+            config = Config.load_strict(path, gameplay_filename=gameplay, environment=environment)
+            self.assertEqual((config.game.bots_per_team, config.game.player_limit), (32, 80))
+            for invalid in (
+                large_match.replace("player_limit = 80", "player_limit = 64"),
+                large_match.replace("player_limit = 80", "player_limit = 129"),
+                large_match.replace("bots_per_team = 32", "bots_per_team = 33"),
+            ):
+                path.write_text(invalid)
+                with self.assertRaises(ConfigurationError):
+                    Config.load_strict(path, gameplay_filename=gameplay, environment=environment)
 
     def test_startup_populates_both_teams_before_first_client(self):
         server = make_server()

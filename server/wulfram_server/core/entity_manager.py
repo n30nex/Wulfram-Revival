@@ -5,6 +5,9 @@ from wulfram_server.network.packets.update_array import UpdateArrayPacket
 from wulfram_server.network.packets.gameplay import DeleteObjectPacket
 
 class EntityManager:
+    # Leave one byte for the opcode and ample space below an Internet MTU.
+    MAX_UPDATE_PAYLOAD = 1199
+
     def __init__(self):
         self._entities: Dict[int, GameEntity] = {}
         self._next_net_id = 1  # Start at 1, 0 might be reserved or null
@@ -111,6 +114,34 @@ class EntityManager:
             e.clear_dirty()
 
     # --- PACKET GENERATION ---
+
+    def _bounded_packets(self, entities, build):
+        # Every chunk carries the same simulation timestamp. The retail
+        # decoder applies that timestamp per entity, not per datagram.
+        payload = build(entities) if len(entities) <= 255 else None
+        if payload is not None and len(payload) <= self.MAX_UPDATE_PAYLOAD:
+            yield payload
+        elif len(entities) > 1:
+            middle = len(entities) // 2
+            yield from self._bounded_packets(entities[:middle], build)
+            yield from self._bounded_packets(entities[middle:], build)
+        elif payload:
+            raise ValueError("one entity exceeds the update datagram limit")
+
+    def build_update_packets(self, entities, **options):
+        yield from self._bounded_packets(entities, lambda group: self.build_update_packet(group, **options))
+
+    def build_forced_update_packets(self, entities, **options):
+        yield from self._bounded_packets(entities, lambda group: self.build_forced_update_packet(group, **options))
+
+    def get_snapshot_packets(self, sequence_num, health=1.0, energy=1.0, viewer_team=None):
+        mask = (UpdateMask.DEFINITION | UpdateMask.POS | UpdateMask.VEL | UpdateMask.ROT
+                | UpdateMask.HEALTH | UpdateMask.WEAPON | UpdateMask.OWNER | UpdateMask.HARD_SYNC)
+        for payload in self.build_forced_update_packets(
+            self.get_all(), sequence_num=sequence_num, is_view_update=True,
+            local_stats=(health, energy), forced_mask=mask, viewer_team=viewer_team,
+        ):
+            yield b'\x0F' + payload
 
     def build_update_packet(self, entities: List[GameEntity], sequence_num: int, 
                            is_view_update: bool, 

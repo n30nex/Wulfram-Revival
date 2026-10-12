@@ -45,19 +45,27 @@ class PacketWriter:
         Writes 'num_bits' from 'value' into the stream.
         Writes from MSB to LSB (Big Endian bit order).
         """
-        # Iterate from the most significant bit down to 0
-        for i in range(num_bits - 1, -1, -1):
-            bit = (value >> i) & 1
-            
-            # Place bit in the current byte at the correct position (7 down to 0)
-            self._current_byte |= bit << (7 - self._bit_index)
-            self._bit_index += 1
-
-            # If byte is full, push to buffer and reset
+        if num_bits <= 0:
+            return
+        value &= (1 << num_bits) - 1
+        if self._bit_index:
+            taken = min(8 - self._bit_index, num_bits)
+            remaining = num_bits - taken
+            self._current_byte |= (value >> remaining) << (8 - self._bit_index - taken)
+            self._bit_index += taken
+            num_bits = remaining
+            value &= (1 << num_bits) - 1
             if self._bit_index == 8:
                 self._buffer.append(self._current_byte)
                 self._current_byte = 0
                 self._bit_index = 0
+        # Pack whole bytes in native code instead of iterating each bit in Python.
+        whole_bytes, trailing_bits = divmod(num_bits, 8)
+        if whole_bytes:
+            self._buffer.extend((value >> trailing_bits).to_bytes(whole_bytes, "big"))
+        if trailing_bits:
+            self._current_byte = (value & ((1 << trailing_bits) - 1)) << (8 - trailing_bits)
+            self._bit_index = trailing_bits
 
     def align(self):
         """Forces the stream to jump to the next byte boundary."""
