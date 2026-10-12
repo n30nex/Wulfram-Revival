@@ -4,6 +4,7 @@ from dataclasses import replace
 import math
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 from test_bots import make_server
 
@@ -60,6 +61,21 @@ class TacticsTests(unittest.TestCase):
         self.assertEqual(bot.target_id,exposed.net_id)
         self.assertNotEqual(bot.target_id,blocked.net_id)
         self.assertEqual(bot.entity.actions[8],1.)
+
+    def test_nearby_route_waypoint_does_not_count_as_objective_arrival(self):
+        server, _ = self.arena(1)
+        bot = server.bots.bots[0]
+        bot.next_plan_at = 200
+        bot.goal = (4500.,2500.)
+        server.bots.navigation.waypoint = Mock(return_value=(510.,2500.))
+        server.bots._decide(bot,100)
+        self.assertTrue(bot.wants_move)
+        self.assertGreater(bot.entity.actions[2],0.)
+        bot.progress_check_at = 101
+        bot.progress_position = bot.entity.pos
+        server.bots._decide(bot,104)
+        self.assertGreater(bot.recovery_until,104)
+        self.assertLess(bot.entity.actions[2],0.)
 
 
 if __name__ == '__main__': unittest.main()

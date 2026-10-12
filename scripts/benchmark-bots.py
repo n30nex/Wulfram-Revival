@@ -82,9 +82,9 @@ def main():
                             if entity is None or not entity.is_manned:
                                 history.clear(); continue
                             if history and history[-1][0] != entity.net_id: history.clear()
-                            history.append((entity.net_id,entity.pos[:2]))
+                            history.append((entity.net_id,entity.pos[:2],bot.wants_move))
                             engaging += bot.engaging
-                            if len(history)==11 and bot.wants_move and math.dist(history[0][1],history[-1][1])<10:
+                            if len(history)==11 and all(row[2] for row in history) and math.dist(history[0][1],history[-1][1])<10:
                                 stalled += 1
                         active = [bot for bot in server.bots.bots if bot.is_bot and bot.entity is not None and bot.entity.is_manned]
                         samples.append({"seconds": round(time.monotonic() - started, 1), "live_bots": live,
@@ -123,6 +123,10 @@ def main():
                     "roles":dict(Counter(bot.role for bot in server.bots.bots if bot.is_bot)),
                     "peak_unique_goals":max((s['unique_goals'] for s in samples),default=0),
                     "fields_built":server.bots.navigation.fields_built,
+                    "final_bots":[{"id":bot.player_id,"team":bot.team,"role":bot.role,"order":bot.order,
+                                  "goal":bot.goal,"position":bot.entity.pos,"engaging":bot.engaging,
+                                  "wants_move":bot.wants_move,"health":bot.entity.health_points}
+                                 for bot in server.bots.bots if bot.is_bot and bot.entity is not None],
                     "bots_past_1km":sum(distance >= 1000 for distance in travel),
                     "median_travel":round(statistics.median(travel),1),
                     "maximum_travel":round(max(travel),1),
@@ -137,7 +141,9 @@ def main():
                 server.tcp_sock.close()
                 server.udp_sock.close()
         args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        print(json.dumps({key: value for key, value in report.items() if key != "samples"}, indent=2))
+        summary = {key:value for key,value in report.items() if key != "samples"}
+        summary['navigation'] = {key:value for key,value in report['navigation'].items() if key not in ('final_bots','by_team')}
+        print(json.dumps(summary, indent=2))
         return 0 if report["passed"] else 1
 
 

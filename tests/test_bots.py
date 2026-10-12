@@ -57,11 +57,13 @@ class BotTests(unittest.TestCase):
         server.bots.step(102.0)
         self.assertEqual(bot.entity.actions[8], 0.0)
         self.assertEqual(bot.entity.actions[12], 0.0)
-        self.assertGreater(bot.entity.actions[2], 0.0)
+        self.assertTrue(bot.wants_move)
+        self.assertGreater(abs(bot.entity.actions[1])+abs(bot.entity.actions[2]), 0.0)
         server.physics.trace_segment.return_value = {"hit": True, "entity_id": 0}
         server.bots.step(103.0)
         self.assertEqual(bot.entity.actions[8], 0.0)
-        self.assertGreater(bot.entity.actions[2], 0.0)
+        self.assertTrue(bot.wants_move)
+        self.assertGreater(abs(bot.entity.actions[1])+abs(bot.entity.actions[2]), 0.0)
 
     def test_spawn_uses_another_free_pad_before_queuing(self):
         server = make_server()

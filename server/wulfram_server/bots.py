@@ -372,12 +372,15 @@ class BotManager:
         waypoint = bot.goal
         if not visible and waypoint is not None and self.navigation is not None:
             waypoint = self.navigation.waypoint(entity.pos,[waypoint])
-        routed = waypoint is not None and math.dist(entity.pos[:2],waypoint) > 35
+        # Reaching an intermediate cell is not arriving at the tactical goal.
+        wants_move = bot.goal is not None and math.dist(entity.pos[:2],bot.goal) > 35
+        routed = waypoint is not None and wants_move
         heading = (dx,dy) if visible else ((waypoint[0]-entity.pos[0],waypoint[1]-entity.pos[1])
                                            if waypoint is not None else (math.cos(entity.rot[2]),math.sin(entity.rot[2])))
         speed = .85
         if not visible and routed:
             length = math.hypot(*heading)
+            speed = min(speed,max(.25,length/90))
             if length > 1:
                 vx,vy = heading[0]/length,heading[1]/length
                 for other in self.server.entities.get_all():
@@ -388,6 +391,8 @@ class BotManager:
                         ahead = -(vx*ax+vy*ay)/apart
                         if ahead > .7:
                             speed = min(speed,max(.15,.85*(apart-15)/50))
+                            side = 1 if bot.tactical_slot%2 else -1
+                            vx,vy = vx-vy*.4*side,vy+vx*.4*side
                         weight = 1.2*(65-apart)/65
                         vx += weight*ax/apart; vy += weight*ay/apart
                 probe = (entity.pos[0]+vx*30,entity.pos[1]+vy*30)
@@ -401,10 +406,10 @@ class BotManager:
                              if visible else 0.0)
         stopping_distance = min(180.0, combat.autocannon_range * 0.5)
         entity.actions[2] = speed if routed and not visible and abs(yaw_error) < 1.0 else 0.0
-        bot.wants_move = bool(routed and not visible)
+        bot.wants_move = bool(wants_move and not visible)
         bot.next_decision_at = now + 0.2
         if now >= bot.progress_check_at:
-            if (bot.progress_position is not None and entity.actions[2] > .2
+            if (bot.progress_position is not None and bot.wants_move
                     and math.dist(bot.progress_position[:2],entity.pos[:2]) < 8):
                 bot.recovery_until = now+1.2
                 bot.next_jump_at = now+.6
@@ -412,7 +417,7 @@ class BotManager:
             bot.progress_check_at = now+3
         if now < bot.recovery_until:
             entity.actions[2] = -.65
-            entity.actions[3] = .65 if bot.player_id%2 else -.65
+            entity.actions[3] = .65 if bot.tactical_slot%2 else -.65
             return
         if not visible or distance <= 1.0e-6 or distance > combat.autocannon_range:
             return
