@@ -47,13 +47,8 @@ class TankPacket(Packet):
                 pulse_config = get_config_by_index(13)
                 _, pulse_value, pulse_bits = pulse_config.compress(self.pulse_charge)
                 pkt.write_bits(pulse_value, pulse_bits)
-            elif self.weapon_table_id == 1:
-                # Scout enables machine-gun and repair firing-state channels.
-                # Its available repair slot also requires translation scalar 14.
-                pkt.write_bits(self.weapon_ready_mask & 0b11, 2)
-                repair_config = get_config_by_index(14)
-                _, repair_value, repair_bits = repair_config.compress(1.0)
-                pkt.write_bits(repair_value, repair_bits)
+            # Scout table 1 has no enabled slots in BehaviorPacket, so the
+            # retail decoder consumes no firing mask or repair-charge scalar.
 
         pkt.write_int32(_unit_type)
         pkt.write_int32(self.net_id)

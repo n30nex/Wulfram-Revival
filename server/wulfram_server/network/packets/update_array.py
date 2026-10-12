@@ -102,9 +102,6 @@ class EntitySerializer:
                 # Tank Behavior enables the firing-state channel for slots 0
                 # and 4, in slot order.
                 self.writer.write_bits(entity.weapon_ready_mask & 0b11, 2)
-            elif entity.weapon_table_id == 1:
-                # Scout Behavior enables the machine-gun and repair channels.
-                self.writer.write_bits(entity.weapon_ready_mask & 0b11, 2)
             elif entity.weapon_table_id == 3:
                 # Gun Turret enables the ready/firing-state channel only for
                 # slot zero.
@@ -219,14 +216,8 @@ class UpdateArrayPacket:
                 pulse_config = get_config_by_index(13)
                 _, pulse_val, pulse_bits = pulse_config.compress(self.local_stats[4])
                 self.writer.write_bits(pulse_val, pulse_bits)
-            elif self.local_stats[2] == 1:
-                # Scout has two state channels plus the repair-charge scalar
-                # required by its available slot 1. Repair is continuously
-                # usable in the authoritative server, so publish full charge.
-                self.writer.write_bits(self.local_stats[3] & 0b11, 2)
-                repair_config = get_config_by_index(14)
-                _, repair_val, repair_bits = repair_config.compress(1.0)
-                self.writer.write_bits(repair_val, repair_bits)
+            # Scout table 1 has no enabled Behavior slots and therefore no
+            # firing-mask or repair-charge bits before the entity count.
         else:
             # If 0, client skips Parse_SpawnVitalStats
             self.writer.write_bool(False) 
