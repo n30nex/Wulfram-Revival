@@ -1,0 +1,64 @@
+CANADAVERSE WULFRAM II
+
+1. Extract the entire ZIP into a writable folder, such as Games.
+2. Open Play Canadaverse.cmd. Keep all the included files together.
+3. Choose any callsign. Public player password: canadaverse
+4. Click a team, open Entry Map, then click a friendly repair-pad flag.
+
+Server: wulfram.canadaverse.org
+Player guide: https://canadaverse.org/wulfram/
+
+MODERN CONTROLS
+W/S: forward/reverse       A/D: strafe
+Q/E: turn                 Space: jump jets
+Mouse: aim                Left mouse: autocannon / Scout machine gun
+Enter: chat               F3: radar range
+F12: save a screenshot    Escape: game menu
+1: pulse shell / Scout repair beam
+2: Piercer (Tank/Siege)
+Shift+Q / Z: increase/decrease upward thrust
+
+Open Settings.cmd while the game is closed to choose classic controls or
+Balanced/High graphics. Settings remain in the game folder. Previous settings
+are retained under canadaverse/controls and canadaverse/graphics.
+
+MATCH PLAY
+64 CPU players join the two teams, with 16 additional places for people.
+CPU roles include assault, flanking, guarding and interception.
+Vehicle kills, destroyed structures and Scout repairs earn team points.
+Rounds last up to 20 minutes and rotate between Crossroads, Mayhem and Frontier.
+
+Press Enter and use these commands:
+/s help                   available commands
+/s score                  current score
+/s status                 current match
+/s vehicle tank           Tank for your next deployment
+/s vehicle scout          Support Scout for your next deployment
+/s vehicle siege          extra-armoured Tank; no cargo
+/s vehicle auto           use the original map-screen vehicle selector
+
+Support Scouts repair friendly units with their repair weapon. Friendly repair
+and refuel pads restore your hull and fuel when you slow down close to the pad.
+Frontier is an original map with three broad approaches and eight repair pads
+per team. The other maps and artwork are from the preserved original game.
+
+IF SOMETHING LOOKS WRONG
+Always launch Play Canadaverse.cmd. Opening wulfram2.exe directly bypasses the
+widescreen helper. Keep the D3D display system selected. Try Balanced graphics
+if needed. The menus retain their original proportions; gameplay is widescreen.
+The game needs outbound TCP and UDP port 2627. Players do not need router port
+forwarding. Check the player page for server status and current downloads.
+
+This is a community alpha, not an official remaster. Windows is the initial
+supported client. Report your display resolution, Windows scaling and the exact
+problem at https://github.com/n30nex/Wulfram-Revival/issues
+
+CREDITS AND SOURCE
+Original Wulfram creators and the Wulfram preservation community.
+https://github.com/baffler/Wulf-Forge
+https://github.com/baffler/Wulfram2-Physics-Core
+https://github.com/cyberbalsa/wulfram2-server
+https://github.com/narzoul/DDrawCompat
+https://github.com/elishacloud/dxwrapper
+Original game assets retain their original rights. Compatibility components
+retain their respective licences. Included DxWrapper licence: dxwrapper-License.txt

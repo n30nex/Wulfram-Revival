@@ -441,19 +441,26 @@ int wmain(int argc, wchar_t **argv) {
     double ui_scale=(double)physical_height/height;
     const wchar_t *server=argc>=5 ? argv[4] : argc==3 ? argv[2] : L"wulfram.canadaverse.org";
     if (!*server || wcslen(server)>253 || wcsspn(server,L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")!=wcslen(server)) return 2;
+    long port=2627;
+    if (lab) {
+        wchar_t port_text[8], *end;
+        DWORD count=GetEnvironmentVariableW(L"WULFRAM_LAB_PORT",port_text,8);
+        if (count>=8) return 2;
+        if (count) { port=wcstol(port_text,&end,10); if (*end || port<1 || port>65535) return 2; }
+    }
     wchar_t folder[MAX_PATH], executable[MAX_PATH], command[1024];
     DWORD length=GetFullPathNameW(argv[1],MAX_PATH,folder,NULL);
     if (!length || length>MAX_PATH-20) return 2;
     swprintf(executable,MAX_PATH,L"%ls\\wulfram2.exe",folder);
     if (!verify_exe(executable)) { fputs("Unsupported Wulfram executable. No process started.\n",stderr); return 2; }
-    swprintf(command,1024,L"\"%ls\" -root -server %ls",executable,server);
+    swprintf(command,1024,L"\"%ls\" -root -server %ls -port %ld",executable,server,port);
     if (lab && !wcscmp(argv[5],L"--lab")) {
         wchar_t password[128];
         DWORD count=GetEnvironmentVariableW(L"WULFRAM_LAB_PASSWORD",password,128);
         if (!count || count>=128 || wcspbrk(password,L" \t\r\n\"\\")) return 2;
         if (argc==7 && wcscmp(argv[6],L"red") && wcscmp(argv[6],L"blue")) return 2;
-        swprintf(command,1024,L"\"%ls\" -root -server %ls -login ClientLab %ls%ls%ls",
-                 executable,server,password,argc==7 ? L" -side " : L"",argc==7 ? argv[6] : L"");
+        swprintf(command,1024,L"\"%ls\" -root -server %ls -port %ld -login ClientLab %ls%ls%ls",
+                 executable,server,port,password,argc==7 ? L" -side " : L"",argc==7 ? argv[6] : L"");
         SecureZeroMemory(password,sizeof(password));
     }
     STARTUPINFOW startup = {0}; startup.cb=sizeof(startup);

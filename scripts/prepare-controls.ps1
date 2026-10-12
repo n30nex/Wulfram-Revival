@@ -22,14 +22,15 @@ axis_key "movement" "q" "turning" absolute -0.6
 axis_key "movement" "e" "turning" absolute 0.6
 action_key "movement" " " "jumpjet"
 '@
-foreach ($name in 'keymap_tank', 'keymap_scout') {
+foreach ($name in 'keymap', 'keymap_tank', 'keymap_scout') {
     $target = Join-Path $ClientDir ('data\' + $name)
     $original = Join-Path $classic $name
     if (-not (Test-Path -LiteralPath $original)) { Copy-Item -LiteralPath $target -Destination $original }
     $lines = [IO.File]::ReadAllLines($original) | Where-Object {
         $_ -notmatch '^(?:axis_key|weapon_key|action_key)\s+"[^"]*"\s+"(?:w|a|s|d|q|e| )"\s'
     }
-    $text = ($lines -join "`r`n") + "`r`n" + ($movement -replace "`r?`n", "`r`n") + "`r`n"
+    $bindings = if ($name -eq 'keymap') { 'axis_key "movement" "shift-q" "upward_thrust" relative 0.5' } else { $movement }
+    $text = ($lines -join "`r`n") + "`r`n" + ($bindings -replace "`r?`n", "`r`n") + "`r`n"
     [IO.File]::WriteAllText((Join-Path $modern $name), $text, [Text.UTF8Encoding]::new($false))
     $selected = Join-Path (Join-Path $profiles $Preset) $name
     if ((Get-FileHash -LiteralPath $target).Hash -ne (Get-FileHash -LiteralPath $selected).Hash) {

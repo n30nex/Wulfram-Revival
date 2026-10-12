@@ -1,0 +1,10 @@
+# Insert inside the existing Canadaverse server block.
+redir /wulfram /wulfram/ 308
+handle_path /wulfram/* {
+    root * /srv/downloads/wulfram/site/current
+    header Cache-Control "no-store"
+    header Cloudflare-CDN-Cache-Control "no-store"
+    file_server
+}
+@wulframPackages path /downloads/wulfram/*.zip /downloads/wulfram/*.sha256
+header @wulframPackages Cache-Control "public, max-age=31536000, immutable"

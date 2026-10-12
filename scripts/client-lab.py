@@ -280,8 +280,9 @@ def start(args, root, client):
     run.mkdir(parents=True)
     launcher = run/'wulfram-display.exe'
     shutil.copy2(args.launcher.resolve(),launcher)
+    environment = dict(os.environ,WULFRAM_LAB_PORT=str(args.port))
     result = subprocess.run([str(launcher),str(client),str(width),str(height),args.server,*extra],
-                            capture_output=True,text=True,timeout=30)
+                            capture_output=True,text=True,timeout=30,env=environment)
     (run/'launch.log').write_text(result.stdout+result.stderr,encoding='utf-8')
     match = re.search(r'DISPLAY_PATCH pid=(\d+)',result.stdout)
     if result.returncode or not match:
@@ -290,6 +291,7 @@ def start(args, root, client):
     try:
         record = {'pid':process.pid,'created':process.created,'client':str(client),'output':[width,height],
                   'logical':logical,'scene':args.scene,'server':args.server,
+                  'port':args.port,
                   'launcher':str(launcher),'launcher_sha256':digest(launcher),'retail_sha256':RETAIL}
         mailbox = re.search(r'CLIENT_LAB_MAILBOX=(\d+)',result.stdout)
         record['mailbox'] = int(mailbox[1]) if mailbox else None
@@ -315,6 +317,7 @@ def main():
     prep = sub.add_parser('prepare'); prep.add_argument('--archive',type=Path,required=True)
     launch = sub.add_parser('start'); launch.add_argument('--launcher',type=Path,required=True)
     launch.add_argument('--resolution',default='1920x1080'); launch.add_argument('--server',default='wulfram.canadaverse.org')
+    launch.add_argument('--port',type=int,choices=range(1,65536),default=2627,metavar='1..65535')
     launch.add_argument('--scene',choices=('login','teams','map'),default='login')
     for name in ('inspect','capture','stop','click'):
         command = sub.add_parser(name); command.add_argument('--run',type=Path,required=True)

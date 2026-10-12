@@ -66,6 +66,16 @@ class MatchTests(unittest.TestCase):
                 self.assertEqual(server.admin_command_queue.qsize(), 1)
                 self.assertEqual(server.admin_command_queue.get_nowait().map_name, "mayhem")
 
+    def test_rotation_visits_each_configured_map_in_order(self):
+        server=self.server()
+        server.cfg=replace(server.cfg,game=replace(server.cfg.game,map_rotation=('crossroads','mayhem','frontier')))
+        with patch('wulfram_server.application.verify_map_land_exists',return_value=True):
+            for expected in ('mayhem','frontier','crossroads','mayhem'):
+                server.current_map_name=admin_commands._choose_rotation_map(server)
+                self.assertEqual(server.current_map_name,expected)
+        with patch('wulfram_server.application.verify_map_land_exists',side_effect=lambda server,name:name!='frontier'):
+            self.assertEqual(admin_commands._choose_rotation_map(server),'crossroads')
+
     def test_retail_score_fields_and_no_fabricated_initial_values(self):
         self.assertEqual(struct.unpack(">iihhhhhiii", UpdateStatsPacket(7, 2, 12, 4, 3).serialize()[1:]),
                          (7, 6, 2, 33, 12, 4, 3, 0, 0, 10))

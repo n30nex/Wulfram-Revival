@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import queue
-import random
 import re
 import time
 from typing import Any
@@ -15,7 +14,8 @@ from wulfram_server.network.packets import WorldStatsPacket
 
 
 MAP_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-MAP_CHANGE_ENTITY_INTERVAL_SECONDS = 0.25
+# Bound the 64-player teardown while retaining death cleanup and packet order.
+MAP_CHANGE_ENTITY_INTERVAL_SECONDS = 0.025
 REPAIR_PAD_UNIT_TYPE = 27
 COMPETING_TEAM_IDS = (1, 2)
 TEAM_NAMES = {1: "Red", 2: "Blue"}
@@ -246,10 +246,8 @@ def _choose_rotation_map(server: Any) -> str | None:
     ]
     if not available:
         return None
-    alternatives = [
-        map_name for map_name in available if map_name != server.current_map_name
-    ]
-    return random.choice(alternatives or available)
+    index = available.index(server.current_map_name) if server.current_map_name in available else -1
+    return available[(index+1) % len(available)]
 
 
 def _queue_automatic_map_change(

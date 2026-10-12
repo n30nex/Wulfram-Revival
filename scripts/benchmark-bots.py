@@ -139,6 +139,9 @@ def main():
                           "physics_step_mean_ms": round(1000 * statistics.mean(ordered), 3) if ordered else None,
                           "samples": samples}
                 report["maps_seen"] = sorted({sample["map"] for sample in samples})
+                report['peak_live_by_map']={name:max(s['live_bots'] for s in samples if s['map']==name)
+                                            for name in report['maps_seen']}
+                report['bots_ever_spawned']=sum(bot.is_bot and bot.spawn_position is not None for bot in server.bots.bots)
                 report['phases'] = {name:{'calls':len(values),'seconds':round(sum(values),3),
                                          'max_ms':round(max(values,default=0)*1000,3)}
                                     for name,values in phase_times.items()}
