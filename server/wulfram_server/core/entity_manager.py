@@ -146,7 +146,8 @@ class EntityManager:
     def build_update_packet(self, entities: List[GameEntity], sequence_num: int, 
                            is_view_update: bool, 
                            local_stats: tuple[float, float] | None = None,
-                           viewer_team: int | None = None) -> Optional[bytes]:
+                           viewer_team: int | None = None,
+                           entity_cache: dict | None = None) -> Optional[bytes]:
         """
         Constructs the payload for an UpdateArrayPacket.
         Crucially, this does NOT clear dirty flags, allowing you to reuse 
@@ -160,6 +161,7 @@ class EntityManager:
             sequence_id=sequence_num,
             is_view_update=is_view_update,
             viewer_team=viewer_team,
+            entity_cache=entity_cache,
         )
         
         # 1. Set Local Stats (Health/Energy) - Only used for 0x0F (View)

@@ -15,6 +15,9 @@ class LargeMatchPackets(unittest.TestCase):
         manager = EntityManager()
         players = [GameEntity(net_id=i, unit_type=1, team_id=1 if i < 3 else 2,
                               weapon_table_id=1) for i in range(1, 4)]
+        for entity in players:
+            entity.health = entity.net_id / 4
+            entity.energy = 1 - entity.health
         cargo = GameEntity(net_id=10, unit_type=19, team_id=1, cargo_item_id=7)
         for entity in [*players, cargo]:
             entity.pending_mask = UpdateMask.DEFINITION
@@ -25,16 +28,19 @@ class LargeMatchPackets(unittest.TestCase):
         server = SimpleNamespace(entities=manager, sessions=sessions, _last_hard_sync_log=0)
         app._broadcast_dirty_state(server, send_view_updates=False)
         wires = [[call.args[0] for call in session.udp_context.send.call_args_list] for session in sessions]
-        self.assertEqual(wires[0][0], wires[1][0])
+        self.assertNotEqual(wires[0][0], wires[1][0])
         self.assertNotEqual(wires[0][0], wires[2][0])
         for index, packets in enumerate(wires):
             received, cargo_items = [], []
             for packet in packets:
                 self.assertEqual(packet[0], 0x0E)
                 bits = RetailBits(packet[1:]); bits.take(32)
-                if bits.take(1):
-                    self.assertEqual(bits.take(5), 1)
-                    bits.take(10); bits.take(10)
+                # Retail applies these fields even when their presence bit is
+                # zero, which would turn its zero-initialized hull into death.
+                self.assertEqual(bits.take(1), 1, "every datagram needs owner vitals")
+                self.assertEqual(bits.take(5), 1)
+                self.assertEqual(bits.take(10), int((1-players[index].health)*1022)+1)
+                self.assertEqual(bits.take(10), int((1-players[index].energy)*1022)+1)
                 for _ in range(bits.take(8)):
                     received.append(bits.take(32))
                     bits.take(1)
@@ -70,13 +76,18 @@ class LargeMatchPackets(unittest.TestCase):
         for entity in entities:
             entity.pending_mask = UpdateMask.DEFINITION
         received = []
-        chunks = list(manager.build_update_packets(entities, sequence_num=1234, is_view_update=False))
+        options = dict(sequence_num=1234, is_view_update=False, local_stats=(.75,.25,1))
+        chunks = list(manager.build_update_packets(entities, **options))
+        self.assertEqual(chunks, list(manager.build_update_packets(entities, entity_cache={}, **options)))
         self.assertGreater(len(chunks), 1)
         for packet in chunks:
             self.assertLessEqual(len(packet) + 1, 1200)
             bits = RetailBits(packet)
             self.assertEqual(bits.take(32), 1234)
-            self.assertEqual(bits.take(1), 0)
+            self.assertEqual(bits.take(1), 1)
+            self.assertEqual(bits.take(5), 1)
+            self.assertEqual(bits.take(10), 256)
+            self.assertEqual(bits.take(10), 767)
             count = bits.take(8)
             self.assertGreater(count, 0)
             for _ in range(count):

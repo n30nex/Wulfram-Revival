@@ -84,9 +84,15 @@ and respawn from unoccupied living friendly pads. Navigation is direct pursuit
 with jumping, so difficult terrain can still strand them. These are basic
 combat opponents, without base-building strategy or route planning.
 
-Large-match updates are split into datagrams of at most 1200 bytes. Each team
-shares the encoded bot/world updates, while player poses and vital statistics
-remain specific to the recipient. Enemy cargo contents remain concealed.
+Large-match updates are split into datagrams of at most 1200 bytes. Every
+datagram includes the recipient's health, fuel and weapon state. The retail
+decoder zero-initializes an omitted vital-stat block and then applies it
+unconditionally, so omitting these fields falsely reports a dead vehicle and
+can leave the screen red. World-entity records are cached per team within a
+broadcast, while vital statistics and owner exclusion remain recipient-specific.
+Enemy cargo contents remain concealed. The advertised per-team player limit
+comes from the configured match capacity, leaving eight human spaces per
+side in the 64-bot profile.
 Hover-support geometry is transformed once per physics tick and uses conservative
 bounds before the original triangle tests. No physics tick rate is reduced.
 

@@ -8,8 +8,9 @@ class EntitySerializer:
     Helper class that handles the specific bit-writing order 
     required by the C++ client's 'WIP_read_array_from_bitstream'.
     """
-    def __init__(self, writer: PacketWriter):
+    def __init__(self, writer: PacketWriter, entity_cache: dict | None = None):
         self.writer = writer
+        self.entity_cache = entity_cache
 
     def serialize(
         self,
@@ -18,6 +19,18 @@ class EntitySerializer:
         forced_mask: int | None = None,
         viewer_team: int | None = None,
     ):
+        if self.entity_cache is not None:
+            # Cache only world records for this broadcast, never local vitals.
+            # Keep the exact bit length because records are not byte-aligned.
+            key = (entity.net_id, force_definition, forced_mask, viewer_team)
+            if key not in self.entity_cache:
+                writer = PacketWriter()
+                EntitySerializer(writer).serialize(entity, force_definition, forced_mask, viewer_team)
+                length = writer.position_bits
+                value = int.from_bytes(writer.get_bytes(), "big") >> (-length % 8)
+                self.entity_cache[key] = (value, length)
+            self.writer.write_bits(*self.entity_cache[key])
+            return
         # 1. Determine the Mask
         # If forced_mask is provided, use it. Otherwise, use entity's current dirty state.
         mask = forced_mask if forced_mask is not None else entity.pending_mask
@@ -155,6 +168,7 @@ class UpdateArrayPacket:
         reconciliation_tick: int | None = None,
         acknowledged_input_marker: int | None = None,
         acknowledged_input_tick: int | None = None,
+        entity_cache: dict | None = None,
     ):
         self.writer = PacketWriter()
         self.sequence_id = sequence_id
@@ -164,6 +178,7 @@ class UpdateArrayPacket:
         self.reconciliation_tick = reconciliation_tick
         self.acknowledged_input_marker = acknowledged_input_marker
         self.acknowledged_input_tick = acknowledged_input_tick
+        self.entity_cache = entity_cache
 
         # Timestamp
         if (is_view_update):
@@ -230,7 +245,7 @@ class UpdateArrayPacket:
         # Total Entity Count (8 bits)
         self.writer.write_bits(count, 8)
 
-        serializer = EntitySerializer(self.writer)
+        serializer = EntitySerializer(self.writer, self.entity_cache)
         
         for entity, force_spawn, forced_mask in self.entities:
             serializer.serialize(

@@ -196,6 +196,7 @@ class WulframServerContext:
     ):
         self.cfg = cfg
         self.packet_cfg = packet_cfg
+        self.packet_cfg.behavior.header.total_team_size = (cfg.game.player_limit + 1) // 2
         self.content_root = Path(content_root).resolve()
         self.hooks = hooks
         self.release_identity = release_identity or ReleaseIdentity.source_checkout()
@@ -1319,13 +1320,10 @@ def _broadcast_dirty_state(
     dirty_entities = server.entities.get_dirty_entities()
     view_dirty_entities = server.entities.get_view_dirty_entities()
     current_tick = get_ticks()
-    network_owners = {
-        session.entity.net_id for session in server.sessions
-        if session.entity is not None and getattr(session, "udp_context", None)
-    }
-    common_dirty = [entity for entity in dirty_entities if entity.net_id not in network_owners]
-    player_dirty = [entity for entity in dirty_entities if entity.net_id in network_owners]
-    shared_updates = {}
+    # The retail client zero-initializes missing vitals (0x004e5db0) and
+    # unconditionally applies them after every array (0x0047de72). Each
+    # datagram must carry this recipient's stats, including split chunks.
+    entity_cache = {}
 
     if (send_update_arrays and dirty_entities) or (send_view_updates and view_dirty_entities):
         for session in server.sessions:
@@ -1336,23 +1334,15 @@ def _broadcast_dirty_state(
 
             my_entity = session.entity
             my_stats = _local_stats(my_entity)
-            others = [e for e in player_dirty if e.net_id != my_entity.net_id]
+            others = [e for e in dirty_entities if e.net_id != my_entity.net_id]
             if send_update_arrays and dirty_entities:
-                # Bots and world objects have identical updates for every
-                # viewer on a team. Encode those once, retaining cargo secrecy
-                # across teams and keeping owner corrections out of the batch.
-                team = getattr(session, "team", None)
-                if team not in shared_updates:
-                    shared_updates[team] = list(server.entities.build_update_packets(
-                        common_dirty, sequence_num=current_tick, is_view_update=False, viewer_team=team))
-                for payload in shared_updates[team]:
-                    session.udp_context.send(b'\x0E' + payload)
                 payloads = server.entities.build_update_packets(
                     others,
                     sequence_num=current_tick,
                     is_view_update=False,
                     local_stats=my_stats,
                     viewer_team=getattr(session, "team", None),
+                    entity_cache=entity_cache,
                 )
                 for payload in payloads:
                     session.udp_context.send(b'\x0E' + payload)
