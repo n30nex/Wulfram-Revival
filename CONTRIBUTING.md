@@ -49,6 +49,31 @@ cannot establish real-time performance, actual network players or uptime.
 Existing report/log paths are refused. Use a separate short `benchmark-bots.py`
 check when measuring wall-clock timing.
 
+For real TCP/UDP lifecycle checks on the same host, keep the native artifact on
+`PYTHONPATH` and run:
+
+```text
+python scripts/check-network-lifecycle.py --content-root /path/to/content --clients 8 --seconds 5 --switch-team --output /private-evidence/team-switch.json
+python scripts/check-network-lifecycle.py --content-root /path/to/content --clients 16 --seconds 8 --output /private-evidence/full-connections.json
+```
+
+Each command creates and stops its own loopback-only native server with 64 bots.
+The first checks Tank deployment, team changes, old-vehicle deletion and Scout
+redeployment with full health/fuel. It requires free team places, so it supports
+at most eight clients. The second exercises all 16 human connections. Reports
+require clean disconnects and no remaining UDP peers or human sessions; they
+record the source, native/probe/content hashes, tick counters and coverage limits.
+These are bounded protocol checks, with no window, live-server changes or soak.
+`timing_qualified` remains false; inspect reported drops separately, and never
+infer Pi performance or physical client compatibility from loopback results.
+
+`check-online.py --switch-team` runs the same extra journey against an explicitly
+selected endpoint. The initial deployment has a 20-second request deadline;
+`--seconds` measures the world sample after deployment. Keep retries and movement
+timers running even when no packets arrive. A team switch adds up to 20 seconds
+to deploy plus another world sample. This probe does not qualify map rotation or
+the preserved client's presentation.
+
 ## Review and release
 
 Explain the player-visible problem, the resulting behavior and the checks run

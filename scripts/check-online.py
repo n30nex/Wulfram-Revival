@@ -69,6 +69,35 @@ def drive_packet(stamp):
     return b'\x0a\x02'+struct.pack('>iiHHHH',stamp,0,2,32735,5,32735)
 
 
+def spawn_state(packet):
+    """Read the retail TANK identity and vitals without the server serializer."""
+    if packet[:1] != b'\x18':
+        raise ValueError('not a TANK packet')
+    bits = ''.join(f'{value:08b}' for value in packet[1:])
+    cursor = 32  # Server timestamp.
+    def take(count):
+        nonlocal cursor
+        if cursor+count > len(bits):
+            raise ValueError('truncated TANK')
+        value = int(bits[cursor:cursor+count], 2)
+        cursor += count
+        return value
+    if take(1) != 1:
+        raise ValueError('missing TANK vitals')
+    table = take(5)
+    if table not in (0, 1):
+        raise ValueError('unexpected player weapon table')
+    health, fuel = take(10), take(10)
+    take(3 if table == 0 else 2)
+    take(8)
+    unit, entity, team = take(32), take(32), take(8)
+    if unit != table:
+        raise ValueError('vehicle and weapon table differ')
+    return {'entity': entity, 'team': team, 'vehicle': unit,
+            'health': 0 if health == 0 else 1-(health-1)/1022,
+            'fuel': 0 if fuel == 0 else 1-(fuel-1)/1022}
+
+
 def main(args):
     global HOST, EXPECTED_IP, PORT
     HOST, EXPECTED_IP, PORT = args.host, args.expected_ip, args.port
@@ -201,6 +230,8 @@ def main(args):
                 if packet[:1] == b"\x22" and len(packet) >= 3:
                     result["login_status_accepted"] = packet[2] == 8
                 result["player_info_received"] |= packet[:1] == b"\x17" and len(packet) == 6
+                if packet[:1] == b"\x17" and len(packet) == 6:
+                    player_id = struct.unpack_from('>i', packet, 1)[0]
                 result["world_metadata_received"] |= packet[:1] == b"\x16"
                 if packet[:1] == b"\x16": result['map']=read_string(packet,1)[0]
             elif packet == b"\x0c" + struct.pack(">i", stamp):
@@ -212,7 +243,8 @@ def main(args):
         result["snapshot_chunks"] = 0
         result["snapshot_entities"] = 0
         result["largest_snapshot_bytes"] = 0
-        pads=[]
+        pads_by_team = {1: [], 2: []}
+        pads = pads_by_team[args.team]
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             try:
@@ -220,7 +252,8 @@ def main(args):
             except TimeoutError:
                 break
             if transport == "tcp" and packet[:1] == b"\x0f":
-                pads.extend(snapshot_pads(packet,args.team))
+                for team in pads_by_team:
+                    pads_by_team[team].extend(snapshot_pads(packet, team))
                 bits = "".join(f"{value:08b}" for value in packet[1:])
                 # Retail tank vitals: present(1), table(5), health/fuel(10+10),
                 # firing flags(3), pulse charge(8); preceded by two timestamps.
@@ -246,7 +279,7 @@ def main(args):
         udp.send(b"\x25" + struct.pack(">HHBiiii", 2, 22, 0, pads[0], 0, 2000, 700))
         result['spawn_requests_sent'] = 1
         started_spawn = time.monotonic()
-        deadline = started_spawn + args.seconds
+        deadline = started_spawn + 20
         retry_at=started_spawn+1
         drive_at=started_spawn
         sequence=2
@@ -254,26 +287,30 @@ def main(args):
         counts = collections.Counter()
         missing_vitals = 0
         while time.monotonic() < deadline:
+            now = time.monotonic()
+            if getattr(args,'drive',False) and result.get('spawn_received') and now >= drive_at:
+                drive_at = now+.2
+                udp.send(drive_packet(int(now*1000)&0x7fffffff))
+                result['movement_inputs_sent'] = result.get('movement_inputs_sent',0)+1
+            if now >= retry_at:
+                retry_at = now+1
+                udp.send(b'\x0b'+struct.pack('>ii',stamp,0))
+                if not result.get('spawn_received') and not getattr(args,'spawn_once',False):
+                    sequence += 1
+                    udp.send(b'\x25'+struct.pack('>HHBiiii',sequence,22,0,pads[(sequence-2)%len(pads)],0,2000,700))
+                    result['spawn_requests_sent'] += 1
+            wake_at = min(deadline, retry_at)
+            if getattr(args,'drive',False) and result.get('spawn_received'):
+                wake_at = min(wake_at, drive_at)
             try:
-                transport, packet = receive(deadline)
+                transport, packet = receive(wake_at)
             except TimeoutError:
-                break
+                continue
             counts[f'{transport}:{packet[0]:02x}'] += 1
-            if packet[:1] == b'\x25' and len(packet) == 2:
+            if packet[:1] == b'\x25' and len(packet) >= 2:
                 codes = result.setdefault('spawn_reply_codes',{})
                 code = str(packet[1])
                 codes[code] = codes.get(code,0)+1
-            if getattr(args,'drive',False) and result.get('spawn_received') and time.monotonic()>=drive_at:
-                drive_at=time.monotonic()+.2
-                udp.send(drive_packet(int(time.monotonic()*1000)&0x7fffffff))
-                result['movement_inputs_sent']=result.get('movement_inputs_sent',0)+1
-            if time.monotonic()>=retry_at:
-                retry_at=time.monotonic()+1
-                udp.send(b'\x0b'+struct.pack('>ii',stamp,0))
-                if not result.get('spawn_received') and not getattr(args,'spawn_once',False):
-                    sequence+=1
-                    udp.send(b'\x25'+struct.pack('>HHBiiii',sequence,22,0,pads[(sequence-2)%len(pads)],0,2000,700))
-                    result['spawn_requests_sent'] += 1
             if packet[:1] in (b"\x18", b"\x0e", b"\x0f"):
                 bits = ''.join(f'{value:08b}' for value in packet[1:])
                 offset = 64 if packet[0] == 0x0f else 32
@@ -284,8 +321,13 @@ def main(args):
                 raw_health = int(bits[offset+6:offset+16],2)
                 health = 0 if raw_health == 0 else 1-(raw_health-1)/1022
                 if packet[0] == 0x18:
+                    state = spawn_state(packet)
+                    if state['team'] != args.team or state['vehicle'] != 0:
+                        raise ValueError('initial spawn identity differs')
                     if not result.get('spawn_received'):
                         result['spawn_received_seconds'] = round(time.monotonic()-started_spawn,3)
+                        result['spawn_state'] = state
+                        deadline = time.monotonic()+args.seconds
                     result['spawn_received'] = True
                     result['spawn_health'] = health
                     result['spawn_table'] = table
@@ -300,6 +342,63 @@ def main(args):
             raise ValueError('spawn did not have full health')
         if missing_vitals:
             raise ValueError('retail decoder would apply zero health from omitted vitals')
+        if getattr(args, 'switch_team', False):
+            result['phase'] = 'team_switch'
+            target_team = 3-args.team
+            switch = result['team_switch'] = {'team': target_team, 'joined': False,
+                'old_entity_deleted': False, 'death_notice': False, 'spawn_requests_sent': 0,
+                'movement_inputs_sent': 0}
+            if not pads_by_team[target_team]:
+                raise ValueError('opposite team has no pads')
+            sequence += 1
+            udp.send(b'\x25' + struct.pack('>HHBii', sequence, 14, 1, target_team, 0))
+            switching_at = time.monotonic()
+            deadline = switching_at+20
+            retry_at = drive_at = switching_at
+            deployed_at = None
+            while time.monotonic() < deadline:
+                now = time.monotonic()
+                if switch['joined'] and deployed_at is None and now >= retry_at:
+                    retry_at = now+1
+                    sequence += 1
+                    choices = pads_by_team[target_team]
+                    pad = choices[switch['spawn_requests_sent'] % len(choices)]
+                    udp.send(b'\x25' + struct.pack('>HHBiiii', sequence, 22, 0, pad, 1, 2000, 700))
+                    switch['spawn_requests_sent'] += 1
+                    udp.send(b'\x0b'+struct.pack('>ii', stamp, 0))
+                if deployed_at is not None:
+                    if now >= drive_at:
+                        drive_at = now+.2
+                        udp.send(drive_packet(int(now*1000)&0x7fffffff))
+                        switch['movement_inputs_sent'] += 1
+                    if now-deployed_at >= args.seconds:
+                        break
+                try:
+                    transport, packet = receive(min(deadline, now+.2))
+                except TimeoutError:
+                    continue
+                if packet[:2] == b'\x25\x11':
+                    switch['joined'] = True
+                elif packet[:1] == b'\x1d' and len(packet) == 5:
+                    switch['death_notice'] |= struct.unpack_from('>i', packet, 1)[0] == player_id
+                elif packet[:1] == b'\x15' and len(packet) == 11 and packet[5] == 1:
+                    switch['old_entity_deleted'] |= struct.unpack_from('>i', packet, 6)[0] == result['spawn_state']['entity']
+                elif packet[:1] == b'\x18':
+                    state = spawn_state(packet)
+                    if state['team'] != target_team:
+                        continue  # A delayed TANK for the previous team is not deployment proof.
+                    if state['entity'] == result['spawn_state']['entity'] or state['vehicle'] != 1:
+                        raise ValueError('team switch did not create a new Scout')
+                    if deployed_at is None:
+                        if state['health'] != 1.0 or state['fuel'] != 1.0:
+                            raise ValueError('Scout did not deploy at full health and fuel')
+                        deployed_at = time.monotonic()
+                        deadline = deployed_at+args.seconds
+                        switch['spawn_state'] = state
+                        switch['spawn_received_seconds'] = round(deployed_at-switching_at, 3)
+            if not all((switch['joined'], switch['death_notice'], switch['old_entity_deleted'],
+                        deployed_at is not None, switch['movement_inputs_sent'] >= 2)):
+                raise ValueError('team switch lifecycle incomplete')
         result["phase"] = "complete"
         result["passed"] = True
     except Exception as error:
@@ -338,4 +437,5 @@ if __name__ == "__main__":
     parser.add_argument('--seconds',type=int,choices=range(5,121),default=8,metavar='5..120')
     parser.add_argument('--drive',action='store_true',help='move off the repair pad during staging connection waves')
     parser.add_argument('--spawn-once',action='store_true',help='disable pad retries to isolate server TANK delivery recovery')
+    parser.add_argument('--switch-team',action='store_true',help='after the Tank sample, change teams and verify deletion and a full-fuel Scout deployment')
     raise SystemExit(main(parser.parse_args()))

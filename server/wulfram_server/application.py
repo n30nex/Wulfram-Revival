@@ -2165,7 +2165,12 @@ def on_viewpoint(ctx: UdpContext, reader: PacketReader):
 def on_reincarnate(ctx: UdpContext, reader: PacketReader):
     """Spawn/Team Request"""
     seq, length, reader = _read_reliable_ordered_body(reader)
-    is_team_switch = reader.read_byte() == 0x01
+    mode = reader.read_byte()
+    # Validate the complete retail body before acknowledging or remembering
+    # its sequence. A malformed request must not consume a corrected retry.
+    if mode not in (0, 1) or length != (14 if mode == 1 else 22):
+        raise PacketDecodeError('invalid reincarnate mode or body length')
+    is_team_switch = mode == 1
     # This is team_id if is_team_switch is 1 (true)
     # If is_team_switch is 0 (false) then it's the repair pad's net id
     team_id_or_repaid_pad = reader.read_int32()

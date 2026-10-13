@@ -180,6 +180,31 @@ class SpawnDeliveryTests(unittest.TestCase):
         app._update_spawn_deliveries(self.server, 101.5)
         self.assertEqual(len(self.tanks()), sent+1)
 
+    def test_malformed_spawn_does_not_consume_sequence_or_change_ownership(self):
+        for kind in ('truncated-spawn', 'trailing-spawn', 'invalid-mode', 'trailing-team'):
+            with self.subTest(kind=kind):
+                self.setUp()
+                pad = next(entity for entity in self.server.entities.get_all()
+                           if entity.unit_type == 27 and entity.team_id == 1)
+                valid = struct.pack('>Biiii', 0, pad.net_id, 0, 2000, 700)
+                body = valid
+                if kind == 'truncated-spawn': body = valid[:9]
+                elif kind == 'trailing-spawn': body += b'\x00'
+                elif kind == 'invalid-mode': body = b'\x02' + valid[1:]
+                elif kind == 'trailing-team': body = struct.pack('>BiiB', 1, 2, 0, 0)
+                malformed = b'\x25' + struct.pack('>HH', 7, len(body)+5) + body
+                before = tuple(self.server.entities.get_all())
+                with self.assertRaises(PacketDecodeError):
+                    app.dispatcher.dispatch_datagram(self.ctx, malformed)
+                self.assertIsNone(self.session.entity)
+                self.assertEqual(self.session.team, 1)
+                self.assertEqual(tuple(self.server.entities.get_all()), before)
+                self.assertEqual(self.ctx.reliable_delivery_seen, {})
+                self.transport.send.assert_not_called()
+                app.dispatcher.dispatch_datagram(self.ctx, b'\x25' + struct.pack('>HH', 7, 22) + valid)
+                self.assertIsNotNone(self.session.entity)
+                self.assertEqual(len(self.tanks()), 1)
+
 
 if __name__ == '__main__':
     unittest.main()
