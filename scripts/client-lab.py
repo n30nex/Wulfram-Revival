@@ -17,6 +17,7 @@ import shutil
 import struct
 import subprocess
 import time
+import uuid
 import zipfile
 
 RETAIL = '94990864ab1db2ddbe2652cfdbca726356b19dd3fb7597945e297a43973d99d4'
@@ -58,7 +59,7 @@ def lab_client(root):
 
 
 class ClientProcess:
-    def __init__(self, pid, client, terminate=False, write=False):
+    def __init__(self, pid, client, terminate=False, write=False, desktop=None):
         if os.name != 'nt':
             raise RuntimeError('The retail client lab requires Windows.')
         self.k = c.WinDLL('kernel32', use_last_error=True)
@@ -76,6 +77,10 @@ class ClientProcess:
         if not self.handle:
             raise ProcessLookupError(f'Test child {pid} is not running or readable.')
         self.pid = pid
+        self.desktop = desktop
+        if desktop is not None and not re.fullmatch(r'WulframLab-[a-f0-9]{32}',desktop):
+            self.close()
+            raise ValueError('Invalid private lab desktop.')
         if self.k.WaitForSingleObject(self.handle,0) == 0:
             self.close()
             raise ProcessLookupError(f'Test child {pid} has exited.')
@@ -158,8 +163,22 @@ class ClientProcess:
                 result.append({'frame': [frame.left, frame.top, frame.right, frame.bottom],
                                'client_size': [client.right, client.bottom], 'dpi': user.GetDpiForWindow(window)})
             return True
-        user.EnumWindows.argtypes = [callback_type, w.LPARAM]
-        user.EnumWindows(callback_type(visit), 0)
+        if self.desktop:
+            user.OpenDesktopW.argtypes = [w.LPCWSTR,w.DWORD,w.BOOL,w.DWORD]
+            user.OpenDesktopW.restype = w.HANDLE
+            user.CloseDesktop.argtypes = [w.HANDLE]
+            user.EnumDesktopWindows.argtypes = [w.HANDLE,callback_type,w.LPARAM]
+            desktop = user.OpenDesktopW(self.desktop,0,False,1)  # DESKTOP_READOBJECTS
+            if not desktop:
+                raise OSError('The recorded private desktop is no longer available.')
+            try:
+                if not user.EnumDesktopWindows(desktop,callback_type(visit),0):
+                    raise OSError('Cannot enumerate the private lab desktop.')
+            finally:
+                user.CloseDesktop(desktop)
+        else:
+            user.EnumWindows.argtypes = [callback_type, w.LPARAM]
+            user.EnumWindows(callback_type(visit), 0)
         return result
 
     def inspect(self, expected):
@@ -302,17 +321,25 @@ def start(args, root, client):
     launcher = run/'wulfram-display.exe'
     shutil.copy2(args.launcher.resolve(),launcher)
     environment = dict(os.environ,WULFRAM_LAB_PORT=str(args.port))
+    environment.pop('WULFRAM_LAB_DESKTOP',None)
+    desktop = 'WulframLab-'+uuid.uuid4().hex if args.background else None
+    if desktop:
+        environment['WULFRAM_LAB_DESKTOP'] = desktop
     result = subprocess.run([str(launcher),str(client),str(width),str(height),args.server,*extra],
-                            capture_output=True,text=True,timeout=30,env=environment)
+                            capture_output=True,text=True,timeout=30,env=environment,
+                            creationflags=subprocess.CREATE_NO_WINDOW)
     (run/'launch.log').write_text(result.stdout+result.stderr,encoding='utf-8')
     match = re.search(r'DISPLAY_PATCH pid=(\d+)',result.stdout)
     if result.returncode or not match:
         raise RuntimeError(f'Launch failed; inspect {run / "launch.log"}.')
-    process = ClientProcess(int(match[1]),client,write=args.scene=='map')
+    if desktop and f'CLIENT_LAB_DESKTOP={desktop}' not in result.stdout:
+        raise RuntimeError('The helper did not confirm private-desktop isolation.')
+    process = ClientProcess(int(match[1]),client,write=args.scene=='map',desktop=desktop)
     try:
         record = {'pid':process.pid,'created':process.created,'client':str(client),'output':[width,height],
                   'logical':logical,'scene':args.scene,'server':args.server,
                   'port':args.port,
+                  'desktop':desktop,'physical_input_qualified':False,
                   'initial_profile_sha256':profile_hash,
                   'launcher':str(launcher),'launcher_sha256':digest(launcher),'retail_sha256':RETAIL}
         mailbox = re.search(r'CLIENT_LAB_MAILBOX=(\d+)',result.stdout)
@@ -366,6 +393,7 @@ def main():
     launch.add_argument('--resolution',default='1920x1080'); launch.add_argument('--server',default='wulfram.canadaverse.org')
     launch.add_argument('--port',type=int,choices=range(1,65536),default=2627,metavar='1..65535')
     launch.add_argument('--scene',choices=('login','teams','map'),default='login')
+    launch.add_argument('--background',action='store_true',help='run only the test child on a private desktop without switching the input desktop')
     for name in ('inspect','capture','stop','click'):
         command = sub.add_parser(name); command.add_argument('--run',type=Path,required=True)
         if name == 'capture':
@@ -383,7 +411,8 @@ def main():
     run = args.run.resolve()
     if not run.is_relative_to(root/'runs'): raise ValueError('Run is outside this lab.')
     record = json.loads((run/'run.json').read_text())
-    process = ClientProcess(record['pid'],client,terminate=args.action=='stop',write=args.action in ('click','capture'))
+    process = ClientProcess(record['pid'],client,terminate=args.action=='stop',write=args.action in ('click','capture'),
+                            desktop=record.get('desktop'))
     try:
         if process.created != record['created']: raise ValueError('PID was reused; refusing access.')
         if args.action == 'stop':
