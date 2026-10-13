@@ -4,6 +4,48 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Background bot qualification, October 13, 2026
+
+[PR #28](https://github.com/n30nex/Wulfram-Revival/pull/28) addresses three
+deployment/recovery problems found with local native physics: a clamped guard
+patrol could stop beside a repair pad, elevated spherical clearance admitted
+low-hovering neighbours too close, and full jets could keep a stuck hull
+bouncing against the pad. Patrol goals now retain pad clearance after terrain
+snapping. Spawn checks preserve horizontal clearance, and recovery briefly
+settles the jets while alternating escape directions before restoring normal
+hover input. These changes use ordinary controls and collision rules.
+
+All 95 Python tests pass. The new patrol/clearance/recovery regressions fail
+against their previous implementations. Windows display/native-physics, Linux
+x64 and ARM64 build jobs pass for implementation source
+`36e4abc4bbbe1ad7481243e4c69ee441e692c7c0`. Its Windows x64 Python 3.13 native
+artifact comes from Actions `38374695555`, SHA-256
+`143ae69af04a62834651e507a68cd174b57b16fb9a96611b83cc13082bfe38b9`;
+the asset-backed binding suite passes on the development host.
+
+`check-bot-deployment.py` runs the actual game loop with a bounded simulation
+clock, 64 bots and 16 bot-driven snapshot recipients. All 64 deploy on
+Crossroads at 54 simulated seconds, Mayhem at 54/60.1 seconds for the two tested
+starting patrol phases, and Frontier at 5.12 seconds. Every scenario ends after
+75 simulated seconds. The prior repeatable Mayhem case left 25 bots waiting.
+These results establish deployment behavior, not real-time capacity, network
+player coverage or uptime. Content files were verified against the public
+server's manifest; an older local Frontier asset copy was excluded.
+
+A separate 75.66-second real-time Mayhem check on Windows 10, CPython 3.13.6
+x64 and an Intel i5-4690K passed with all 64 bots deployed and 16 simulated
+snapshot recipients. It completed 1892 physics ticks with zero dropped ticks,
+had no final stalled bots or occupied deployment pads, and emitted updates no
+larger than 804 bytes. Physics-step p95 was 8.124 ms; CPU use averaged 25.22% of
+one core. This is a scoped desktop result, not a Pi performance measurement.
+
+Earlier real-time checks are retained: a 45-second Crossroads run had only 59
+bots deployed and missed its timing gate; a subsequent 75-second run deployed
+all 64 with 3 dropped ticks out of 1878 scheduled (0.16%). The earlier Mayhem
+runs exposed the guard/scout pad jams described above. Do not hide these failed
+attempts or infer a platform-wide pass from one bounded check. The live Pi
+server and player client are preserved while local background work continues.
+
 ## Network qualification findings, October 13, 2026
 
 The private eight-bot network lab reproduced a deployment stall in the deployed

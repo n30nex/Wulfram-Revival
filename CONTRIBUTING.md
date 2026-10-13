@@ -33,6 +33,22 @@ without opening a window or listening on a port. Keep checks short and targeted;
 no soak tests are part of the active roadmap. This tests simulation, not the
 preserved client's rendering or physical input.
 
+For repeatable deployment behavior, run the actual game loop with a simulation
+clock and the same native binding and authorized assets:
+
+```text
+python scripts/check-bot-deployment.py --content-root /path/to/content --map mayhem --phase 1000 --seconds 75 --output /private-evidence/mayhem.json
+```
+
+The scenario contains 64 bots and 16 bot-driven snapshot recipients, opens no
+window or listening port, and stops after the requested simulated duration.
+`--phase` selects the starting patrol-clock phase; 1000 and 1009 exercise the two
+Mayhem patrol phases. Reports bind the harness/native hashes and record when all
+bots first deploy. `timing_qualified` always remains false: an accelerated clock
+cannot establish real-time performance, actual network players or uptime.
+Existing report/log paths are refused. Use a separate short `benchmark-bots.py`
+check when measuring wall-clock timing.
+
 ## Review and release
 
 Explain the player-visible problem, the resulting behavior and the checks run
