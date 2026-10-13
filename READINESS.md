@@ -1,7 +1,8 @@
 # Release readiness
 
 This is a public community alpha, not a certification of full original-game
-parity or every Windows/GPU/display combination. Linux remains out of scope.
+parity or every Windows/GPU/display combination. A native Linux client remains
+out of scope for the first release; the Pi server runs on Linux.
 
 ## Deployed candidate, October 12, 2026
 

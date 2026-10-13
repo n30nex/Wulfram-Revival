@@ -4,6 +4,12 @@ This fork adds combat CPU players and a native Raspberry Pi 5 server
 configuration to baffler's portable Physics Core. The first client target is
 Windows. Original game assets remain separate from this AGPL source tree.
 
+The maintained source is on `main`. The public server is `0.4.0-alpha2.1` and
+the Windows package is `0.4.0-alpha2`; see [READINESS.md](READINESS.md) for their
+exact revisions, package checksum, current recovery procedures and outstanding
+qualification. The [roadmap](ROADMAP.md) defines the path from this playable
+alpha to a stable release.
+
 ## Content and client
 
 Use an original Wulfram II installation with the required maps and collision
@@ -74,8 +80,10 @@ dependencies are the standard library and the compiled physics module.
 `config/pi5.toml` is the deployment configuration, and `config/wulfram.service`
 is the bounded systemd service. Adjust the bind and advertised public addresses
 to your host. Store distinct player/admin credentials in the root-readable
-`/etc/wulfram/server.env`; do not commit credentials. Keep assets under
-`/opt/canadaverse/wulfram/content`, with a source checkout at `current`.
+`/etc/wulfram/server.env`; do not commit credentials. Prepare assets outside
+the source checkout. Public deployments use verified, versioned release
+directories with their own content and native binding; `current` selects the
+active release. See [READINESS.md](READINESS.md) for that release boundary.
 
 `bots_per_team = 32` starts 64 CPU players; `player_limit = 80` leaves 16 human
 slots. The client receives a 40-player limit per team from the same server
@@ -189,7 +197,9 @@ paths compensate for the menu origin. The Units Info preview panes use that
 origin too. F12 capture is repaired by converting the renderer's RGB24
 readback to RGB565 before the original BMP writer; `--self-test` checks the
 conversion and checks that hook emission preserves caller buffers. The
-Actions-built helper is included in the public 0.4.0-alpha1 Windows package.
+Actions-built helper is included in the public Windows package. Alpha2 adds
+aligned framebuffer rows for 5:4 displays and preserves the shipped graphics
+profile during harness checks; see [READINESS.md](READINESS.md).
 
 `scripts/client-lab.py` prepares an isolated client from the verified baseline
 archive and records each exact child process, creation time, executable hash,
@@ -213,7 +223,7 @@ Settings.cmd presets, and verifies every file in the resulting ZIP. Pass the
 published ZIP checksum to the lab's `prepare --sha256` option to test a fresh
 extraction. No developer runtime is needed to play the packaged game.
 
-Release verification included 43 Python tests, Windows/x64/ARM64 CI, the
+Earlier alpha1 verification included 43 Python tests, Windows/x64/ARM64 CI, the
 asset-dependent native binding tests, a five-minute 64-bot/16-simulated-client
 run, and a six-minute three-map rotation. The load runs recorded 65 dropped
 ticks out of 7,435 and 47 out of 8,955 respectively, with no bots stalled at
@@ -221,6 +231,8 @@ their ends. Public TCP/UDP login, team capacity, full-health spawning and
 owner vitals were checked from an external host. The public ZIP was downloaded
 there in full and its SHA-256 matched. The real packaged Windows client joined
 the public 64-bot match and survived a round change before deploying on Mayhem.
+Current alpha2 results and additional disconnect/reconnect checks are recorded
+in [READINESS.md](READINESS.md).
 
 ## Public connection
 
@@ -236,8 +248,11 @@ The launcher defaults to the public hostname; `-Server <address>` overrides it.
 The launcher checks preparation before opening the game. Do not add
 `-windowed` or `-allow_windowed`: the former forces the old software renderer
 instead of the configured D3D backend. DDrawCompat supplies the borderless
-window. Choose a callsign and use the server's player password. Keep the
-separate admin password private.
+window. Choose a callsign and use the public player join code `canadaverse`
+when joining `wulfram.canadaverse.org`. Keep the separate admin password private;
+it is not the public player credential. A rejected login can currently resemble
+a connection failure; retry with the public code. Clearer rejection and retry
+messages are tracked in [#13](https://github.com/n30nex/Wulfram-Revival/issues/13).
 
 ## Checks and rollback
 
@@ -262,10 +277,12 @@ installation is changed by preparation.
 
 The CI builds the native core/bindings and checks CPU-player logic without
 redistributing game assets. Asset-dependent physics tests run on the Pi.
-The 0.4.0-alpha1 deployment retains the previous source, native binding,
-configuration and website route. Its guarded recovery script is
+Use the current recovery procedures in [READINESS.md](READINESS.md). The older
+0.4.0-alpha1 deployment retained the previous source, native binding,
+configuration and website route. Its historical recovery script is
 `/opt/canadaverse/wulfram/backups/20261012-public-105646f/rollback.sh` on the Pi.
-It restores the previous game release and Caddy configuration and disables
+It restored the previous game release and Caddy configuration and disabled
 only the Wulfram status timer. Check the recorded deployment identities before
-using it; do not overwrite unrelated later website changes. The public game
-hostname and its TCP/UDP router forwarding were preserved by the deployment.
+using any recovery script; do not overwrite unrelated later website changes.
+The public game hostname and its TCP/UDP router forwarding were preserved by
+the deployment.
