@@ -16,7 +16,7 @@ namespace {
 using namespace wulfram::physics;
 
 constexpr const char* kWorldCapsuleName = "wulfram.physics.World";
-constexpr int kPythonBindingApiVersion = 13;
+constexpr int kPythonBindingApiVersion = 14;
 
 struct PythonWorld {
     PythonWorld(PhysicsConfig config, TerrainGrid terrain)
@@ -1258,6 +1258,23 @@ PyObject* ChangeFuel(PyObject* args, PyObject* kwargs, bool add) {
 PyObject* ConsumeFuel(PyObject*, PyObject* args, PyObject* kwargs) { return ChangeFuel(args, kwargs, false); }
 PyObject* AddFuel(PyObject*, PyObject* args, PyObject* kwargs) { return ChangeFuel(args, kwargs, true); }
 
+PyObject* VehicleFuelCapacity(PyObject*, PyObject* args, PyObject* kwargs) {
+    PyObject* capsule = nullptr;
+    int vehicleType = 0;
+    static const char* keywords[] = {"world", "vehicle_type", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "Oi:vehicle_fuel_capacity",
+            const_cast<char**>(keywords), &capsule, &vehicleType)) return nullptr;
+    PythonWorld* world = GetWorld(capsule);
+    if (world == nullptr) return nullptr;
+    if (vehicleType != 0 && vehicleType != 1) {
+        PyErr_SetString(PyExc_ValueError, "vehicle_type must be Tank (0) or Scout (1)");
+        return nullptr;
+    }
+    const auto& configuration = world->world.Config();
+    return PyFloat_FromDouble(vehicleType == 1
+        ? configuration.scout.maximumFuel : configuration.tank.maximumFuel);
+}
+
 PyObject* WriteSnapshot(PyObject*, PyObject* args) {
     PyObject* capsule = nullptr;
     if (!PyArg_ParseTuple(args, "O:write_snapshot", &capsule)) {
@@ -1435,6 +1452,8 @@ PyMethodDef kMethods[] = {
      "Consume authoritative vehicle fuel if the full amount is available."},
     {"add_fuel", reinterpret_cast<PyCFunction>(AddFuel), METH_VARARGS | METH_KEYWORDS,
      "Refuel an authoritative vehicle up to its configured capacity."},
+    {"vehicle_fuel_capacity", reinterpret_cast<PyCFunction>(VehicleFuelCapacity), METH_VARARGS | METH_KEYWORDS,
+     "Read the configured fuel capacity used when creating this vehicle type."},
     {"write_snapshot", WriteSnapshot, METH_VARARGS, "Copy the current authoritative snapshot to Python."},
     {"drain_trace_events", DrainTraceEvents, METH_VARARGS, "Copy and clear native trace events."},
     {

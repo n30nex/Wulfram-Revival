@@ -14,7 +14,7 @@ jobs:
           $pythonExe = (Get-Command python).Source
           cmake -S physics -B build/physics-x64 -A x64 -DWULFRAM_PHYSICS_BUILD_TESTS=OFF "-DPython3_EXECUTABLE=$pythonExe"
       - run: cmake --build build/physics-x64 --config Release --parallel 2
-      - run: python -c "import sys; sys.path.insert(0, 'build/physics-x64/Release'); import _wulfram_physics as p; assert p.api_version() == 13"
+      - run: python -c "import sys; sys.path.insert(0, 'build/physics-x64/Release'); import _wulfram_physics as p; assert p.api_version() == 14"
       - uses: actions/upload-artifact@v4
         with:
           name: wulfram-physics-windows-x64-python313

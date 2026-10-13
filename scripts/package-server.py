@@ -34,7 +34,7 @@ def main():
     revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     spec=importlib.util.spec_from_file_location('_wulfram_physics',args.native)
     native=importlib.util.module_from_spec(spec); spec.loader.exec_module(native)
-    if native.api_version()!=13: raise ValueError('Unexpected physics API')
+    if native.api_version()!=14: raise ValueError('Unexpected physics API')
     world=native.create_world(count_x=2,count_y=2,spacing_x=1.0,spacing_y=1.0,
                              heights_x_major=[0.0]*4,terrain_identity='release-probe',configuration={})
     physics_version=native.write_snapshot(world)['physics_version']

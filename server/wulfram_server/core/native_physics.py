@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from wulfram_server.core.land import LandMap
 
 
-PYTHON_BINDING_API_VERSION = 13
+PYTHON_BINDING_API_VERSION = 14
 TANK_UNIT_TYPE = 0
 SCOUT_UNIT_TYPE = 1
 PLAYER_VEHICLE_UNIT_TYPES = frozenset((TANK_UNIT_TYPE, SCOUT_UNIT_TYPE))
@@ -204,11 +204,7 @@ class PhysicsWorldHost:
             else None
         )
         self._core_configuration = self._build_core_configuration(packet_config, config)
-        self._maximum_fuel = float(
-            self._core_configuration["maximum_fuel"]
-            if self._core_configuration is not None
-            else 33000.0
-        )
+        self._fuel_capacities: dict[int, float] = {}
         self._starting_jet_strength = float(
             packet_config.behavior.vehicle_physics.starting_jet_strength
             if packet_config is not None
@@ -324,12 +320,13 @@ class PhysicsWorldHost:
         if not math.isfinite(amount) or amount < 0:
             raise ValueError("fuel amount must be finite and nonnegative")
         with self._lock:
-            if self._maximum_fuel <= 0 or entity.energy * self._maximum_fuel < amount:
+            capacity = self._fuel_capacities.get(entity.unit_type, 0.0)
+            if capacity <= 0 or entity.energy * capacity < amount:
                 return False
             if not entity.is_docked and (self._world is None or not self._native.consume_fuel(
                     world=self._world, entity_id=entity.net_id, amount=amount)):
                 return False
-            entity.energy = max(0.0, entity.energy - amount / self._maximum_fuel)
+            entity.energy = max(0.0, entity.energy - amount / capacity)
             entity.mark_dirty(UpdateMask.ENERGY)
             return True
 
@@ -337,12 +334,13 @@ class PhysicsWorldHost:
         if not math.isfinite(amount) or amount < 0:
             raise ValueError("fuel amount must be finite and nonnegative")
         with self._lock:
-            if self._maximum_fuel <= 0 or entity.energy >= 1.0 or amount == 0:
+            capacity = self._fuel_capacities.get(entity.unit_type, 0.0)
+            if capacity <= 0 or entity.energy >= 1.0 or amount == 0:
                 return False
             if not entity.is_docked and (self._world is None or not self._native.add_fuel(
                     world=self._world, entity_id=entity.net_id, amount=amount)):
                 return False
-            entity.energy = min(1.0, entity.energy + amount / self._maximum_fuel)
+            entity.energy = min(1.0, entity.energy + amount / capacity)
             entity.mark_dirty(UpdateMask.ENERGY)
             return True
 
@@ -389,6 +387,13 @@ class PhysicsWorldHost:
             terrain_identity=land.identity,
             configuration=self._core_configuration,
         )
+        # Energy is a fraction of this vehicle's capacity, including while
+        # docked. The native core owns the Tank/Scout capacity definitions.
+        capacities = {kind:float(self._native.vehicle_fuel_capacity(self._world,kind))
+                      for kind in PLAYER_VEHICLE_UNIT_TYPES}
+        if any(not math.isfinite(capacity) or capacity <= 0 for capacity in capacities.values()):
+            raise NativePhysicsUnavailable("native vehicle fuel capacity must be finite and positive")
+        self._fuel_capacities = capacities
         self._terrain_revision = land.revision
         self._next_tick = 1
         self._world_time_milliseconds = 0
@@ -518,7 +523,7 @@ class PhysicsWorldHost:
             angular_velocity=entity.spin,
             collision_asset=collision_asset,
             collision_identity=collision_identity,
-            fuel=self._maximum_fuel * max(0.0, min(1.0, float(entity.energy))),
+            fuel=self._fuel_capacities[entity.unit_type] * max(0.0, min(1.0, float(entity.energy))),
             jet_strength=self._starting_jet_strength,
             current_input=(
                 0.0,
@@ -665,8 +670,6 @@ class PhysicsWorldHost:
 
     def _regenerate_docked_fuel(self) -> None:
         """Advance fuel for player vehicles intentionally removed from the native world."""
-        if self._maximum_fuel <= 0.0:
-            return
         fuel_units = (
             self._fuel_regeneration_per_second
             * self._resting_fuel_multiplier
@@ -675,7 +678,6 @@ class PhysicsWorldHost:
         )
         if fuel_units <= 0.0:
             return
-        normalized_gain = fuel_units / self._maximum_fuel
         for entity in self.entities.get_all():
             if (
                 entity.unit_type not in PLAYER_VEHICLE_UNIT_TYPES
@@ -684,7 +686,7 @@ class PhysicsWorldHost:
             ):
                 continue
             previous = max(0.0, min(1.0, float(entity.energy)))
-            regenerated = min(1.0, previous + normalized_gain)
+            regenerated = min(1.0, previous + fuel_units/self._fuel_capacities[entity.unit_type])
             if regenerated - previous > 1.0e-9:
                 entity.energy = regenerated
                 entity.mark_dirty(UpdateMask.ENERGY)
@@ -705,9 +707,10 @@ class PhysicsWorldHost:
         velocity = tuple(native_entity["linear_velocity"])
         rotation = tuple(native_entity["euler_radians"])
         spin = tuple(native_entity["angular_velocity"])
+        capacity = self._fuel_capacities.get(entity.unit_type, 0.0)
         energy = (
-            max(0.0, min(1.0, float(native_entity["fuel"]) / self._maximum_fuel))
-            if self._maximum_fuel > 0.0
+            max(0.0, min(1.0, float(native_entity["fuel"]) / capacity))
+            if capacity > 0.0
             else 0.0
         )
         entity.settling_contact_threshold = float(

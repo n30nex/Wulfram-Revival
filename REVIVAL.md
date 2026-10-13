@@ -129,7 +129,7 @@ restores the original map-screen Tank/Scout choice. Low-resource bots return
 to friendly service pads, and Scouts seek nearby damaged allies.
 
 Weapon fuel debit and pad refueling now use native authority. These changes
-require Python binding API **13**; rebuild the native module with the source
+require Python binding API **14**; rebuild the native module with the source
 before deploying this branch. Reusing the live API-12 module is rejected.
 
 Generate the original Frontier map into a new, external map directory:
