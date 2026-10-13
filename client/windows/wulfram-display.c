@@ -526,23 +526,8 @@ static int patch_display(HANDLE process, int width, int height) {
         && fix_screenshot(process);
 }
 
-static int valid_lab_desktop(const wchar_t *name) {
-    return wcslen(name)==43 && !wcsncmp(name,L"WulframLab-",11)
-        && wcsspn(name+11,L"0123456789abcdef")==32;
-}
-
-static int desktop_self_test(void) {
-    const wchar_t *invalid[]={L"Default",L"WinSta0\\Default",L"WulframLab-",
-        L"WulframLab-0000000000000000000000000000000g",
-        L"WulframLab-000000000000000000000000000000000"};
-    int ok=valid_lab_desktop(L"WulframLab-0123456789abcdef0123456789abcdef");
-    for (size_t i=0;i<sizeof(invalid)/sizeof(*invalid);++i) ok=ok && !valid_lab_desktop(invalid[i]);
-    puts(ok ? "LAB_DESKTOP_BOUNDARY=PASS" : "LAB_DESKTOP_BOUNDARY=FAIL");
-    return ok ? 0 : 1;
-}
-
 int wmain(int argc, wchar_t **argv) {
-    if (argc==2 && !wcscmp(argv[1],L"--self-test")) return screenshot_self_test() || hook_self_test() || desktop_self_test();
+    if (argc==2 && !wcscmp(argv[1],L"--self-test")) return screenshot_self_test() || hook_self_test();
     int lab=((argc==6 || argc==7) && !wcscmp(argv[5],L"--lab"))
         || (argc==6 && !wcscmp(argv[5],L"--lab-view"));
     if (argc != 2 && argc != 3 && argc != 4 && argc != 5 && !lab) {
@@ -595,23 +580,8 @@ int wmain(int argc, wchar_t **argv) {
         SecureZeroMemory(password,sizeof(password));
     }
     STARTUPINFOW startup = {0}; startup.cb=sizeof(startup);
-    wchar_t desktop_name[80]={0};
-    HDESK desktop=NULL;
-    if (lab) {
-        DWORD count=GetEnvironmentVariableW(L"WULFRAM_LAB_DESKTOP",desktop_name,80);
-        if (count) {
-            if (count>=80 || !valid_lab_desktop(desktop_name)) {
-                fputs("Invalid private lab desktop name.\n",stderr); return 2;
-            }
-            desktop=CreateDesktopW(desktop_name,NULL,NULL,0,
-                DESKTOP_CREATEWINDOW|DESKTOP_READOBJECTS|DESKTOP_WRITEOBJECTS|DESKTOP_ENUMERATE,NULL);
-            if (!desktop) { fprintf(stderr,"Private desktop creation failed: %lu\n",GetLastError()); return 1; }
-            startup.lpDesktop=desktop_name;
-        }
-    }
     PROCESS_INFORMATION child={0};
     if (!CreateProcessW(executable,command,NULL,NULL,FALSE,CREATE_SUSPENDED,NULL,folder,&startup,&child)) {
-        if (desktop) CloseDesktop(desktop);
         fprintf(stderr,"Launch failed: %lu\n",GetLastError()); return 1;
     }
     uintptr_t mailbox=0;
@@ -619,14 +589,11 @@ int wmain(int argc, wchar_t **argv) {
         || (lab && !install_lab_menu_input(child.hProcess,width,height,&mailbox))
         || ResumeThread(child.hThread)==(DWORD)-1) {
         fprintf(stderr,"Display signatures/write failed; stopping only the new suspended child. Error=%lu\n",GetLastError());
-        TerminateProcess(child.hProcess,2); CloseHandle(child.hThread); CloseHandle(child.hProcess);
-        if (desktop) CloseDesktop(desktop);
-        return 1;
+        TerminateProcess(child.hProcess,2); CloseHandle(child.hThread); CloseHandle(child.hProcess); return 1;
     }
     printf("DISPLAY_PATCH pid=%lu output=%ldx%ld logical=%dx%d ui_scale=%.3f vertical_fov=preserved\n",
            child.dwProcessId,physical_width,physical_height,width,height,ui_scale);
     if (mailbox) printf("CLIENT_LAB_MAILBOX=%lu\n",(unsigned long)mailbox);
-    if (desktop) printf("CLIENT_LAB_DESKTOP=%ls\n",desktop_name);
     fflush(stdout);
     WaitForInputIdle(child.hProcess,10000);
     uint32_t renderer=0, viewport=0;
@@ -637,6 +604,5 @@ int wmain(int argc, wchar_t **argv) {
     if (viewport) read_memory(child.hProcess,viewport,bounds,8);
     printf("DISPLAY_STATE renderer=%dx%d viewport=%dx%d\n",dimensions[0],dimensions[1],bounds[0],bounds[1]);
     CloseHandle(child.hThread); CloseHandle(child.hProcess);
-    if (desktop) CloseDesktop(desktop);
     return 0;
 }

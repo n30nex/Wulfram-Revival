@@ -32,7 +32,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: wulfram-display-windows-x86
-          path: build/windows-display/Release/wulfram-display.exe
+          path: |
+            build/windows-display/Release/wulfram-display.exe
+            build/windows-display/Release/wulfram-layout-check.exe
   linux:
     strategy:
       matrix:

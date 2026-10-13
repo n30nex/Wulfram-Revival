@@ -11,3 +11,17 @@ else()
 endif()
 enable_testing()
 add_test(NAME display-helper COMMAND wulfram-display --self-test)
+
+# The offline fixture reserves the retail image's original 0x00400000 base.
+# Keep this test executable elsewhere; the shipped launcher retains ASLR.
+add_executable(wulfram-layout-check wulfram-layout-check.c)
+set_target_properties(wulfram-layout-check PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+target_link_libraries(wulfram-layout-check PRIVATE bcrypt user32)
+if(MSVC)
+  set_property(TARGET wulfram-layout-check PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  target_compile_definitions(wulfram-layout-check PRIVATE _CRT_SECURE_NO_WARNINGS)
+  target_link_options(wulfram-layout-check PRIVATE /BASE:0x10000000 /DYNAMICBASE:NO)
+else()
+  target_link_options(wulfram-layout-check PRIVATE -municode -Wl,--image-base,0x10000000,--disable-dynamicbase)
+endif()
+add_test(NAME layout-check-abi COMMAND wulfram-layout-check --self-test)
