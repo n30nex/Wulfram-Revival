@@ -6,9 +6,12 @@ opcode counters and queue bounds; pair it with client-lab gameplay evidence.
 import argparse
 from collections import Counter, deque
 from contextlib import ExitStack
+from datetime import datetime, timezone
+import hashlib
 import heapq
 import ipaddress
 import json
+import os
 from pathlib import Path
 import random
 import select
@@ -118,12 +121,15 @@ def run(args):
         raise ValueError('refusing to overwrite a lab report')
     profile = PROFILES[args.profile]
     schedule = DatagramSchedule(profile,args.seed)
-    report = {'status':'starting','profile':args.profile,'parameters':profile,'seed':args.seed,
+    report = {'schema_version':1,'status':'starting','profile':args.profile,'parameters':profile,'seed':args.seed,
+              'relay_pid':os.getpid(),'started_utc':datetime.now(timezone.utc).isoformat(),
+              'relay_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               'tcp_bytes':{'client':0,'server':0},'peak_tcp_queued_bytes':0}
     args.report.parent.mkdir(parents=True,exist_ok=True)
     started = time.monotonic()
     def save():
-        report.update(elapsed_seconds=round(time.monotonic()-started,3),
+        report.update(updated_utc=datetime.now(timezone.utc).isoformat(),
+                      elapsed_seconds=round(time.monotonic()-started,3),
                       udp=dict(schedule.counts),udp_delivered=dict(schedule.delivered))
         temporary = args.report.with_suffix('.tmp')
         temporary.write_text(json.dumps(report,indent=2)+'\n')

@@ -244,6 +244,7 @@ def main(args):
                 break
         result["phase"] = "spawn"
         udp.send(b"\x25" + struct.pack(">HHBiiii", 2, 22, 0, pads[0], 0, 2000, 700))
+        result['spawn_requests_sent'] = 1
         started_spawn = time.monotonic()
         deadline = started_spawn + args.seconds
         retry_at=started_spawn+1
@@ -265,9 +266,10 @@ def main(args):
             if time.monotonic()>=retry_at:
                 retry_at=time.monotonic()+1
                 udp.send(b'\x0b'+struct.pack('>ii',stamp,0))
-                if not result.get('spawn_received'):
+                if not result.get('spawn_received') and not getattr(args,'spawn_once',False):
                     sequence+=1
                     udp.send(b'\x25'+struct.pack('>HHBiiii',sequence,22,0,pads[(sequence-2)%len(pads)],0,2000,700))
+                    result['spawn_requests_sent'] += 1
             if packet[:1] in (b"\x18", b"\x0e", b"\x0f"):
                 bits = ''.join(f'{value:08b}' for value in packet[1:])
                 offset = 64 if packet[0] == 0x0f else 32
@@ -278,6 +280,8 @@ def main(args):
                 raw_health = int(bits[offset+6:offset+16],2)
                 health = 0 if raw_health == 0 else 1-(raw_health-1)/1022
                 if packet[0] == 0x18:
+                    if not result.get('spawn_received'):
+                        result['spawn_received_seconds'] = round(time.monotonic()-started_spawn,3)
                     result['spawn_received'] = True
                     result['spawn_health'] = health
                     result['spawn_table'] = table
@@ -322,4 +326,5 @@ if __name__ == "__main__":
     parser.add_argument('--team',type=int,choices=(1,2),default=1)
     parser.add_argument('--seconds',type=int,choices=range(5,121),default=8,metavar='5..120')
     parser.add_argument('--drive',action='store_true',help='move off the repair pad during staging connection waves')
+    parser.add_argument('--spawn-once',action='store_true',help='disable pad retries to isolate server TANK delivery recovery')
     raise SystemExit(main(parser.parse_args()))
