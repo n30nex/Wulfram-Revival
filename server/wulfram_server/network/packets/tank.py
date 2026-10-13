@@ -41,8 +41,9 @@ class TankPacket(Packet):
 
         if stats.include_vitals:
             pkt.write_bits(self.weapon_table_id, 5)
-            pkt.write_bits(stats.health_mult_bits if self.health is None else round(max(0, min(1, self.health))*1023), 10)
-            pkt.write_bits(stats.energy_mult_bits if self.energy is None else round(max(0, min(1, self.energy))*1023), 10)
+            # Retail vitals encode depletion: 1 is full, 1023 is empty.
+            pkt.write_bits(stats.health_mult_bits if self.health is None else int((1-max(0, min(1, self.health)))*1022)+1, 10)
+            pkt.write_bits(stats.energy_mult_bits if self.energy is None else int((1-max(0, min(1, self.energy)))*1022)+1, 10)
             write_local_weapon_state(pkt, self.weapon_table_id, self.weapon_ready_mask,
                                      self.pulse_charge, self.repair_charge)
 

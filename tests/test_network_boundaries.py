@@ -215,8 +215,8 @@ class NetworkBoundaryTests(unittest.TestCase):
         reader.read_int32()
         self.assertEqual(reader.read_bits(1), 1)
         self.assertEqual(reader.read_bits(5), 0)
-        self.assertAlmostEqual(reader.read_bits(10)/1023, .47, delta=.001)
-        self.assertAlmostEqual(reader.read_bits(10)/1023, .38, delta=.001)
+        self.assertAlmostEqual(1-(reader.read_bits(10)-1)/1022, .47, delta=.001)
+        self.assertAlmostEqual(1-(reader.read_bits(10)-1)/1022, .38, delta=.001)
         self.assertNotIn(0x18, app.RELIABLE_GAME_OPCODES)
 
     def test_slow_tcp_reader_has_a_bounded_queue_without_blocking_the_simulation(self):

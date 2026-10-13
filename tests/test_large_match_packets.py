@@ -33,8 +33,8 @@ class LargeMatchPackets(unittest.TestCase):
         for index, packets in enumerate(wires):
             received, cargo_items = [], []
             for packet in packets:
-                self.assertEqual(packet[0], 0x0E)
-                bits = RetailBits(packet[1:]); bits.take(32)
+                self.assertIn(packet[0], (0x0E, 0x0F))
+                bits = RetailBits(packet[1:]); bits.take(64 if packet[0] == 0x0F else 32)
                 # Retail applies these fields even when their presence bit is
                 # zero, which would turn its zero-initialized hull into death.
                 self.assertEqual(bits.take(1), 1, "every datagram needs owner vitals")
@@ -45,12 +45,19 @@ class LargeMatchPackets(unittest.TestCase):
                 for _ in range(bits.take(8)):
                     received.append(bits.take(32))
                     bits.take(1)
-                    self.assertEqual(bits.take(10), UpdateMask.DEFINITION)
+                    mask = bits.take(10)
+                    self.assertTrue(mask & UpdateMask.DEFINITION)
                     bits.take(16)
                     unit_type = bits.take(8); bits.take(8); bits.take(8)
                     if unit_type == 19:
                         cargo_items.append(bits.take(8))
                     bits.take(1)
+                    for flag in (2,4,8,16):
+                        if mask & flag: bits.take(3*(13+bits.take(2)))
+                    if mask & 32: bits.take(10)
+                    if mask & 64: bits.take({0:3,1:2,2:0,3:1}[bits.take(5)])
+                    if mask & 128: bits.take(10)
+                    if mask & 256: bits.take(32)
                 bits.finish()
             self.assertEqual(set(received), {1, 2, 3, 10} - {index+1})
             self.assertEqual(cargo_items, [7 if index < 2 else 13])

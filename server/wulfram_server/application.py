@@ -870,14 +870,14 @@ def send_existing_player_entity_definitions(ctx: TcpContext | UdpContext, reason
     payloads = ctx.server.entities.build_forced_update_packets(
         entities,
         sequence_num=get_ticks(),
-        is_view_update=False,
+        is_view_update=True,
         forced_mask=forced_mask,
         local_stats=local_stats,
         force_spawn=True,
         viewer_team=session.team,
     )
     for payload in payloads:
-        send_reliable_game_packet(session, b"\x0E" + payload)
+        send_reliable_game_packet(session, b"\x0F" + payload)
     for other_session in ctx.server.sessions:
         if getattr(other_session, "carried_cargo_item_id", None) is None:
             continue
@@ -1466,8 +1466,9 @@ def _broadcast_dirty_state(
             my_stats = _local_stats(my_entity)
             others = [e for e in dirty_entities if e.net_id != my_entity.net_id]
             if send_update_arrays and dirty_entities:
+                definitions = [e for e in others if e.pending_mask & UpdateMask.DEFINITION]
                 payloads = server.entities.build_update_packets(
-                    others,
+                    [e for e in others if not e.pending_mask & UpdateMask.DEFINITION],
                     sequence_num=current_tick,
                     is_view_update=False,
                     local_stats=my_stats,
@@ -1475,10 +1476,7 @@ def _broadcast_dirty_state(
                     entity_cache=entity_cache,
                 )
                 for payload in payloads:
-                    if any(e.pending_mask & UpdateMask.DEFINITION for e in others):
-                        send_reliable_game_packet(session, b'\x0E' + payload)
-                    else:
-                        session.udp_context.send(b'\x0E' + payload)
+                    session.udp_context.send(b'\x0E' + payload)
                     if any(e.pending_mask & UpdateMask.HARD_SYNC for e in others):
                         now = time.monotonic()
                         if now - server._last_hard_sync_log >= 2.0:
@@ -1492,6 +1490,17 @@ def _broadcast_dirty_state(
                                 "[snapshot] broadcast 0x0E hard-sync "
                                 f"to_player={session.player_id} entities={ids}"
                             )
+                # Use the proven TCP world-snapshot format for definitions;
+                # retain the retail 0x0E movement format on its UDP path.
+                if definitions:
+                    mask = (UpdateMask.DEFINITION | UpdateMask.POS | UpdateMask.VEL
+                            | UpdateMask.ROT | UpdateMask.SPIN | UpdateMask.HEALTH
+                            | UpdateMask.WEAPON | UpdateMask.OWNER)
+                    for payload in server.entities.build_forced_update_packets(
+                            definitions, sequence_num=current_tick, is_view_update=True,
+                            forced_mask=mask, local_stats=my_stats, force_spawn=True,
+                            viewer_team=session.team):
+                        send_reliable_game_packet(session, b'\x0F' + payload)
 
             if send_view_updates and my_entity in view_dirty_entities:
                 if server.hooks.suppress_owner_view_update(server, session, my_entity):
@@ -2381,8 +2390,8 @@ def send_current_tank(ctx: UdpContext) -> None:
     entity = ctx.session.entity
     if entity is None or not entity.is_manned or entity.health_points <= 0:
         return
-    # TANK has a bit-packed tail. The retail TCP decoder does not finish this
-    # record cleanly, so preserve its UDP path and honor native resend requests.
+    # Preserve the retail TANK path and honor its native resend requests;
+    # snapshots and lifecycle messages have separate delivery requirements.
     ctx.send(TankPacket(
         net_id=entity.net_id, sequence_id=get_ticks(), tank_cfg=ctx.server.packet_cfg.tank,
         team_id=entity.team_id, unit_type=entity.unit_type, pos=entity.pos, rot=entity.rot,

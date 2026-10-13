@@ -4,11 +4,27 @@ import runpy
 import struct
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 LAB = runpy.run_path(str(Path(__file__).resolve().parents[1]/'scripts/client-lab.py'))
 
 
 class ClientLabTests(unittest.TestCase):
+    def test_a_single_world_frame_followed_by_an_error_is_not_success(self):
+        for stays in (False, True):
+            now, calls = [0.0], [0]
+            def inspect(_):
+                calls[0] += 1
+                return {'scene':'world' if stays or calls[0] == 1 else 'other'}
+            clock = LAB['wait_for_state'].__globals__['time']
+            with patch.object(clock,'monotonic',side_effect=lambda:now[0]), \
+                 patch.object(clock,'sleep',side_effect=lambda seconds:now.__setitem__(0,now[0]+seconds)):
+                state, stable = LAB['wait_for_state'](SimpleNamespace(inspect=inspect),[960,540],
+                                                      lambda current: current['scene']=='world',timeout=1)
+            self.assertEqual(stable,stays)
+            self.assertGreaterEqual(now[0],.75)
+
     def test_cursor_pixel_check_rejects_a_pointer_drawn_at_an_offset(self):
         header=bytearray(54); header[:2]=b'BM'
         struct.pack_into('<I',header,10,54)
