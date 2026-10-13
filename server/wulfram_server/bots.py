@@ -63,6 +63,7 @@ class BotSession:
     progress_position: tuple[float,float,float] | None = None
     progress_check_at: float = 0.0
     recovery_until: float = 0.0
+    recovery_side: float = 1.0
     spawn_position: tuple[float,float,float] | None = None
     spawned_terrain: tuple[str,int] | None = None
     furthest_travel: float = 0.0
@@ -147,7 +148,10 @@ class BotManager:
             spawn_pos = (pad.pos[0], pad.pos[1], pad.pos[2] + BOT_SPAWN_HEIGHT_OFFSET)
             if not require_free or not any(
                 other.unit_type in (0, 1) and other.health_points > 0.0
-                and math.dist(other.pos, spawn_pos) < 20.0
+                # Low-hovering vehicles still need the full lateral clearance.
+                # A sphere around the elevated spawn point shrank that space.
+                and abs(other.pos[2]-spawn_pos[2]) < 20.0
+                and math.dist(other.pos[:2],spawn_pos[:2]) < 20.0
                 for other in entities
             ):
                 return pad
@@ -256,6 +260,7 @@ class BotManager:
         bot.progress_position = spawn_pos
         bot.progress_check_at = now+3
         bot.recovery_until = 0
+        bot.recovery_side = -1.0 if bot.tactical_slot%2 else 1.0
         bot.engaging = False
         bot.next_plan_at = 0
         bot.objective_id = 0
@@ -328,7 +333,17 @@ class BotManager:
             anchor = homes[(slot//4) % len(homes)]
             # Patrol outside the spawn pads, with two stops and staggered phases.
             angle = (slot//4)*math.pi/2 + (int(now/18 + slot) % 2)*.8
-            destination = (anchor.pos[0]+280*math.cos(angle),anchor.pos[1]+280*math.sin(angle))
+            destination = None
+            for offset in range(8):
+                direction = angle+offset*math.pi/4
+                candidate = (anchor.pos[0]+280*math.cos(direction),anchor.pos[1]+280*math.sin(direction))
+                if self.navigation is not None:
+                    candidate = self.navigation.reachable_near(entity.pos,candidate)
+                # Clamping an off-map patrol point can put it back on a pad.
+                # Allow for the 35-unit arrival radius as well as pad occupancy.
+                if candidate is not None and all(math.dist(candidate,pad.pos[:2]) >= 80 for pad in pads):
+                    destination = candidate
+                    break
             target = None
         else:
             target = (structures[(slot//2) % len(structures)] if structures else
@@ -365,7 +380,7 @@ class BotManager:
             # every moving target on every steering tick. Aim still uses live pose.
             destination = tuple(math.floor(value/200)*200+100 for value in destination)
         bot.goal = (self.navigation.reachable_near(entity.pos,destination)
-                    if self.navigation is not None else destination)
+                    if self.navigation is not None and destination is not None else destination)
         bot.next_plan_at = now+2+bot.rng.random()*.6
 
     def _decide(self, bot: BotSession, now: float) -> None:
@@ -515,12 +530,16 @@ class BotManager:
             if (bot.progress_position is not None and bot.wants_move
                     and math.dist(bot.progress_position[:2],entity.pos[:2]) < 8):
                 bot.recovery_until = now+1.2
+                bot.recovery_side = -bot.recovery_side
                 bot.next_jump_at = now+.6
             bot.progress_position = entity.pos
             bot.progress_check_at = now+3
         if now < bot.recovery_until:
+            # Let a bouncing hull settle before lifting again. Holding full
+            # jets against a pad lip can defeat repeated reverse/strafe input.
+            entity.actions[5] = 0.0
             entity.actions[2] = -.65
-            entity.actions[3] = .65 if bot.tactical_slot%2 else -.65
+            entity.actions[3] = .65*bot.recovery_side
             return
         if service_targets:
             return

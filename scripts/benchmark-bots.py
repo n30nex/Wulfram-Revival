@@ -121,6 +121,9 @@ def main():
                                         "spawned_bots":sum(bot.is_bot and bot.spawn_position is not None
                                                            and bot.spawned_terrain == (server.land.identity,server.land.revision)
                                                            for bot in server.bots.bots),
+                                        "waiting_first_by_team":{str(team):sum(bot.is_bot and bot.team==team
+                                            and (bot.spawn_position is None or bot.spawned_terrain != (server.land.identity,server.land.revision))
+                                            for bot in server.bots.bots) for team in (1,2)},
                                         "unique_goals":len({bot.goal for bot in active if bot.goal is not None}),
                                         "positions":[[bot.player_id,bot.team,bot.role,round(bot.entity.pos[0]),round(bot.entity.pos[1])]
                                                      for bot in active]})
@@ -147,6 +150,19 @@ def main():
                 report['bots_ever_spawned']=sum(bot.is_bot and bot.spawn_position is not None for bot in server.bots.bots)
                 report['spawned_by_map']={name:max(s['spawned_bots'] for s in samples if s['map']==name)
                                           for name in report['maps_seen']}
+                from wulfram_server.bots import BOT_SPAWN_HEIGHT_OFFSET
+                owners={bot.entity.net_id:bot for bot in server.bots.bots if bot.entity is not None}
+                report['deployment']={
+                    'waiting_first_by_team':samples[-1]['waiting_first_by_team'] if samples else {},
+                    'pads':[{'id':pad.net_id,'team':pad.team_id,'position':pad.pos,'health':pad.health_points,
+                        'blocking_vehicles':[{'id':unit.net_id,'player':owners[unit.net_id].player_id if unit.net_id in owners else None,
+                            'position':unit.pos,'velocity':unit.vel,'health':unit.health_points,'energy':unit.energy,
+                            'order':owners[unit.net_id].order if unit.net_id in owners else None,
+                            'wants_move':owners[unit.net_id].wants_move if unit.net_id in owners else None}
+                            for unit in server.entities.get_all() if unit.unit_type in (0,1) and unit.health_points>0
+                            and abs(unit.pos[2]-(pad.pos[2]+BOT_SPAWN_HEIGHT_OFFSET))<20
+                            and math.dist(unit.pos[:2],pad.pos[:2])<20]}
+                        for pad in server.entities.get_all() if pad.unit_type==27]}
                 report['phases'] = {name:{'calls':len(values),'seconds':round(sum(values),3),
                                          'max_ms':round(max(values,default=0)*1000,3)}
                                     for name,values in phase_times.items()}
