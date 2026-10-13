@@ -55,13 +55,22 @@ For real TCP/UDP lifecycle checks on the same host, keep the native artifact on
 ```text
 python scripts/check-network-lifecycle.py --content-root /path/to/content --clients 8 --seconds 5 --switch-team --output /private-evidence/team-switch.json
 python scripts/check-network-lifecycle.py --content-root /path/to/content --clients 16 --seconds 8 --output /private-evidence/full-connections.json
+python scripts/check-network-lifecycle.py --content-root /path/to/content --clients 16 --seconds 5 --rotate-map mayhem --reconnect --output /private-evidence/map-reconnect.json
 ```
 
 Each command creates and stops its own loopback-only native server with 64 bots.
 The first checks Tank deployment, team changes, old-vehicle deletion and Scout
 redeployment with full health/fuel. It requires free team places, so it supports
-at most eight clients. The second exercises all 16 human connections. Reports
-require clean disconnects and no remaining UDP peers or human sessions; they
+at most eight clients. The second exercises all 16 human connections. The third
+queues a normal map transition after all clients deploy, discards any UDP world
+announcements, and requires each client to receive the replacement over TCP,
+request its snapshot and deploy again. `--reconnect` repeats login/deployment
+with the same callsign, requiring a new player identity and the current map.
+The two supported replacement maps are Mayhem and Frontier. Team-switch and
+map-change scenarios are separate choices.
+
+Reports require clean disconnects and no remaining UDP peers, human sessions
+or registered vehicles belonging to the test clients; they
 record the source, native/probe/content hashes, tick counters and coverage limits.
 These are bounded protocol checks, with no window, live-server changes or soak.
 `timing_qualified` remains false; inspect reported drops separately, and never
@@ -71,8 +80,10 @@ infer Pi performance or physical client compatibility from loopback results.
 selected endpoint. The initial deployment has a 20-second request deadline;
 `--seconds` measures the world sample after deployment. Keep retries and movement
 timers running even when no packets arrive. A team switch adds up to 20 seconds
-to deploy plus another world sample. This probe does not qualify map rotation or
-the preserved client's presentation.
+to deploy plus another world sample. `--wait-map NAME` instead allows 30 seconds
+for a replacement map, then requests the new snapshot and deployment. It does
+not initiate a live map change. These protocol checks do not qualify the
+preserved client's rendering or physical input.
 
 ## Review and release
 

@@ -124,6 +124,7 @@ def main(args):
         udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         pending = collections.deque()
         buffer = bytearray()
+        world_announcements = collections.deque(maxlen=4)
 
         def send_tcp(payload):
             tcp.sendall(struct.pack(">H", len(payload) + 2) + payload)
@@ -131,7 +132,10 @@ def main(args):
         def receive(deadline):
             while time.monotonic() < deadline:
                 if pending:
-                    return pending.popleft()
+                    message = pending.popleft()
+                    if message[1][:1] == b'\x16':
+                        world_announcements.append(message)
+                    return message
                 readable, _, _ = select.select([tcp, udp], [], [], max(0, deadline - time.monotonic()))
                 for sock in readable:
                     if sock is tcp:
@@ -190,7 +194,7 @@ def main(args):
             raise TimeoutError("UDP key identification")
         key = echo = None
         result["phase"] = "login_verification"
-        send_tcp(b"\x21\x03" + string('Check'+secrets.token_hex(4)) + string(os.environ.get('WULFRAM_PROBE_PASSWORD','canadaverse')))
+        send_tcp(b"\x21\x03" + string(getattr(args, 'callsign', None) or 'Check'+secrets.token_hex(4)) + string(os.environ.get('WULFRAM_PROBE_PASSWORD','canadaverse')))
         deadline = time.monotonic() + 5
         while not result["login_verified_udp"]:
             transport, packet = receive(deadline)
@@ -232,6 +236,7 @@ def main(args):
                 result["player_info_received"] |= packet[:1] == b"\x17" and len(packet) == 6
                 if packet[:1] == b"\x17" and len(packet) == 6:
                     player_id = struct.unpack_from('>i', packet, 1)[0]
+                    result['player_id'] = player_id
                 result["world_metadata_received"] |= packet[:1] == b"\x16"
                 if packet[:1] == b"\x16": result['map']=read_string(packet,1)[0]
             elif packet == b"\x0c" + struct.pack(">i", stamp):
@@ -239,34 +244,36 @@ def main(args):
         result["phase"] = "world_snapshot"
         if result["bots_by_team"] != {"1": args.bots//2, "2": args.bots//2}:
             raise ValueError("bot roster is incomplete")
-        send_tcp(b"\x39\x01")
-        result["snapshot_chunks"] = 0
-        result["snapshot_entities"] = 0
-        result["largest_snapshot_bytes"] = 0
-        pads_by_team = {1: [], 2: []}
+        def request_snapshot():
+            send_tcp(b"\x39\x01")
+            summary = {'snapshot_chunks': 0, 'snapshot_entities': 0, 'largest_snapshot_bytes': 0}
+            pads_by_team = {1: [], 2: []}
+            deadline = time.monotonic()+3
+            while time.monotonic() < deadline:
+                try:
+                    transport, packet = receive(deadline)
+                except TimeoutError:
+                    break
+                if transport == 'tcp' and packet[:1] == b'\x0f':
+                    for team in pads_by_team:
+                        pads_by_team[team].extend(snapshot_pads(packet, team))
+                    bits = ''.join(f'{value:08b}' for value in packet[1:])
+                    # Spectator vitals use table zero, including its 3+8-bit tail.
+                    if bits[64] != '1' or int(bits[65:70], 2) != 0:
+                        raise ValueError('unexpected snapshot vitals')
+                    count = int(bits[101:109], 2)
+                    if count == 0 or len(packet) > 1200:
+                        raise ValueError('invalid bounded snapshot')
+                    summary['snapshot_chunks'] += 1
+                    summary['snapshot_entities'] += count
+                    summary['largest_snapshot_bytes'] = max(summary['largest_snapshot_bytes'], len(packet))
+            if not summary['snapshot_chunks'] or not pads_by_team[args.team]:
+                raise ValueError('world snapshot missing')
+            return summary, pads_by_team
+        world_announcements.clear()
+        snapshot, pads_by_team = request_snapshot()
+        result.update(snapshot)
         pads = pads_by_team[args.team]
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            try:
-                transport, packet = receive(deadline)
-            except TimeoutError:
-                break
-            if transport == "tcp" and packet[:1] == b"\x0f":
-                for team in pads_by_team:
-                    pads_by_team[team].extend(snapshot_pads(packet, team))
-                bits = "".join(f"{value:08b}" for value in packet[1:])
-                # Retail tank vitals: present(1), table(5), health/fuel(10+10),
-                # firing flags(3), pulse charge(8); preceded by two timestamps.
-                if bits[64] != "1" or int(bits[65:70], 2) != 0:
-                    raise ValueError("unexpected snapshot vitals")
-                count = int(bits[101:109], 2)
-                if count == 0 or len(packet) > 1200:
-                    raise ValueError("invalid bounded snapshot")
-                result["snapshot_chunks"] += 1
-                result["snapshot_entities"] += count
-                result["largest_snapshot_bytes"] = max(result["largest_snapshot_bytes"], len(packet))
-        if not result["snapshot_chunks"] or not pads:
-            raise ValueError("world snapshot missing")
         result["phase"] = "team_join"
         udp.send(b"\x25" + struct.pack(">HHBii", 1, 14, 1, args.team, 0))
         deadline = time.monotonic() + 4
@@ -307,6 +314,8 @@ def main(args):
             except TimeoutError:
                 continue
             counts[f'{transport}:{packet[0]:02x}'] += 1
+            if packet[:1] == b'\x16' and getattr(args, 'wait_map', None):
+                break  # The requested handover can interrupt the old-world sample.
             if packet[:1] == b'\x25' and len(packet) >= 2:
                 codes = result.setdefault('spawn_reply_codes',{})
                 code = str(packet[1])
@@ -342,6 +351,70 @@ def main(args):
             raise ValueError('spawn did not have full health')
         if missing_vitals:
             raise ValueError('retail decoder would apply zero health from omitted vitals')
+        if getattr(args, 'wait_map', None):
+            result['phase'] = 'map_change'
+            change = result['map_change'] = {'from': result['map'], 'to': args.wait_map,
+                                            'spawn_requests_sent': 0, 'movement_inputs_sent': 0}
+            if result['map'] == args.wait_map:
+                raise ValueError('already on the requested replacement map')
+            deadline = time.monotonic()+30
+            retry_at = time.monotonic()
+            announcement = None
+            while time.monotonic() < deadline:
+                for message in world_announcements:
+                    if read_string(message[1], 1)[0] == args.wait_map:
+                        announcement = message
+                        break
+                if announcement is not None:
+                    break
+                now = time.monotonic()
+                if now >= retry_at:
+                    retry_at = now+1
+                    udp.send(b'\x0b'+struct.pack('>ii', stamp, 0))
+                try:
+                    receive(min(deadline, retry_at))
+                except TimeoutError:
+                    continue
+            if announcement is None or announcement[0] != 'tcp':
+                raise ValueError('replacement map not announced over TCP')
+            change['announcement_transport'] = announcement[0]
+            snapshot, new_pads = request_snapshot()
+            change.update(snapshot)
+            choices = new_pads[args.team]
+            deadline = time.monotonic()+20
+            retry_at = drive_at = time.monotonic()
+            deployed_at = None
+            while time.monotonic() < deadline:
+                now = time.monotonic()
+                if deployed_at is None and now >= retry_at:
+                    retry_at = now+1
+                    sequence += 1
+                    pad = choices[change['spawn_requests_sent'] % len(choices)]
+                    udp.send(b'\x25'+struct.pack('>HHBiiii', sequence, 22, 0, pad, 0, 2000, 700))
+                    change['spawn_requests_sent'] += 1
+                    udp.send(b'\x0b'+struct.pack('>ii', stamp, 0))
+                if deployed_at is not None and now >= drive_at:
+                    drive_at = now+.2
+                    udp.send(drive_packet(int(now*1000)&0x7fffffff))
+                    change['movement_inputs_sent'] += 1
+                try:
+                    transport, packet = receive(min(deadline, now+.2))
+                except TimeoutError:
+                    continue
+                if packet[:1] == b'\x18':
+                    state = spawn_state(packet)
+                    if state['entity'] == result['spawn_state']['entity']:
+                        continue  # A delayed old TANK is not a new-world spawn.
+                    if state['team'] != args.team or state['vehicle'] != 0:
+                        raise ValueError('replacement-world spawn identity differs')
+                    if deployed_at is None:
+                        if state['health'] != 1.0 or state['fuel'] != 1.0:
+                            raise ValueError('replacement-world spawn was not full')
+                        deployed_at = time.monotonic()
+                        deadline = deployed_at+args.seconds
+                        change['spawn_state'] = state
+            if deployed_at is None or change['movement_inputs_sent'] < 2:
+                raise ValueError('replacement-world deployment incomplete')
         if getattr(args, 'switch_team', False):
             result['phase'] = 'team_switch'
             target_team = 3-args.team
@@ -437,5 +510,8 @@ if __name__ == "__main__":
     parser.add_argument('--seconds',type=int,choices=range(5,121),default=8,metavar='5..120')
     parser.add_argument('--drive',action='store_true',help='move off the repair pad during staging connection waves')
     parser.add_argument('--spawn-once',action='store_true',help='disable pad retries to isolate server TANK delivery recovery')
-    parser.add_argument('--switch-team',action='store_true',help='after the Tank sample, change teams and verify deletion and a full-fuel Scout deployment')
+    journey = parser.add_mutually_exclusive_group()
+    journey.add_argument('--switch-team',action='store_true',help='after the Tank sample, change teams and verify deletion and a full-fuel Scout deployment')
+    journey.add_argument('--wait-map',choices=('crossroads','mayhem','frontier'),help='wait up to 30 seconds for a TCP map announcement, then request the new snapshot and deploy')
+    parser.add_argument('--callsign',help='use the same test callsign when checking reconnect cleanup')
     raise SystemExit(main(parser.parse_args()))

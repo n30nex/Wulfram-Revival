@@ -162,6 +162,10 @@ class ClientSession:
         # Gate flag for the global loop
         self.is_ready_for_updates: bool = False
         self.world_announced: bool = False
+        # Keep a complete old-world snapshot ahead of a replacement map's
+        # announcement on this connection's reliable control channel.
+        self.world_lock = threading.RLock()
+        self.world_change_event = threading.Event()
         
         # UDP Linkage
         self.udp_addr: Optional[Tuple[str, int]] = None
@@ -194,6 +198,7 @@ class ClientSession:
             return
         self._cleaned_up = True
         self.stop_ping_event.set()
+        self.world_change_event.set()
         self.spawn_delivery = None
         was_logged_in = self.is_logged_in
         self.is_logged_in = False
@@ -229,6 +234,7 @@ class ClientSession:
     def disconnect(self):
         """Wake the owning TCP worker; it performs cleanup exactly once."""
         self.stop_ping_event.set()
+        self.world_change_event.set()
         self.spawn_delivery = None
         for event in (self.key_echoed_event, self.login_received, self.d_handshake_ack_event):
             event.set()
@@ -1691,13 +1697,17 @@ def global_game_loop(server: WulframServerContext):
 
 def start_ping_loop(ctx: TcpContext):
     def run():
+        next_ping = 0.0
         while not ctx.stop_ping_event.is_set():
             try:
-                ctx.send(PingRequestPacket())
-                ctx.stop_ping_event.wait(10.0)
-            except OSError:
-                break
+                if ctx.session.world_change_event.is_set():
+                    announce_world(ctx)
+                if time.monotonic() >= next_ping:
+                    ctx.send(PingRequestPacket())
+                    next_ping = time.monotonic()+10.0
+                ctx.session.world_change_event.wait(max(0.0, next_ping-time.monotonic()))
             except Exception:
+                ctx.session.disconnect()
                 break
     threading.Thread(target=run, daemon=True).start()
 
@@ -1832,39 +1842,51 @@ def on_bps_request(ctx: TcpContext, payload: bytes):
 @dispatcher.route(0x39)
 def on_want_updates(ctx: TcpContext, payload: bytes):
     ctx.server.logger.log_packet("TCP-RECV", payload)
-    if not ctx.session.is_logged_in or not ctx.session.world_announced or ctx.session.is_ready_for_updates:
-        return
-    print(">>> Client is ready for updates (0x39)")
-    ctx.server.trace.state("WANT_UPDATES", player=ctx.session.player_id)
-    ctx.send(CommMessagePacket(
-                message_type=0,
-                source_player_id=ctx.session.player_id, 
-                chat_scope_id=0, 
-                recepient_id=0, 
-                message=f"Welcome to {ctx.server.cfg.game.display_name}. {ctx.server.cfg.game.motd}"
-            ))
-    ctx.send(CommMessagePacket(
-                message_type=0,
-                source_player_id=ctx.session.player_id, 
-                chat_scope_id=0, 
-                recepient_id=0, 
-                message="Choose a team and click a friendly repair pad to deploy. /s help and /s score are available."
-            ))
-    # SEND FULL WORLD SNAPSHOT
-    snapshots = ctx.server.entities.get_snapshot_packets(
-        sequence_num=get_ticks(),
-        health=1.0,
-        energy=1.0,
-        viewer_team=ctx.session.team,
-    )
-    # We send this over TCP to ensure they get the initial world state reliably
-    for snapshot in snapshots:
-        ctx.send(snapshot)
+    with ctx.session.world_lock:
+        if (not ctx.session.is_logged_in or not ctx.session.world_announced
+                or ctx.session.is_ready_for_updates or ctx.session.stop_ping_event.is_set()
+                or ctx.session.world_change_event.is_set()
+                or getattr(ctx.server, 'map_change_transition', None) is not None):
+            return
+        land = ctx.server.land
+        print(">>> Client is ready for updates (0x39)")
+        ctx.server.trace.state("WANT_UPDATES", player=ctx.session.player_id)
+        ctx.send(CommMessagePacket(
+            message_type=0, source_player_id=ctx.session.player_id, chat_scope_id=0, recepient_id=0,
+            message=f"Welcome to {ctx.server.cfg.game.display_name}. {ctx.server.cfg.game.motd}"
+        ))
+        ctx.send(CommMessagePacket(
+            message_type=0, source_player_id=ctx.session.player_id, chat_scope_id=0, recepient_id=0,
+            message="Choose a team and click a friendly repair pad to deploy. /s help and /s score are available."
+        ))
+        snapshots = ctx.server.entities.get_snapshot_packets(
+            sequence_num=get_ticks(), health=1.0, energy=1.0, viewer_team=ctx.session.team,
+        )
+        for snapshot in snapshots:
+            ctx.send(snapshot)
+        # Teardown can begin while this TCP worker sends its snapshot. The
+        # replacement announcement waits for world_lock and rearms readiness.
+        if (ctx.server.land is not land or getattr(ctx.server, 'map_change_transition', None) is not None
+                or ctx.session.stop_ping_event.is_set()):
+            return
+        ctx.session.is_ready_for_updates = True
+        ctx.server.trace.state("WORLD_SYNCED", player=ctx.session.player_id)
+        ctx.server.hooks.world_ready(ctx)
+        print(f">>> Snapshot sent. Client {ctx.session.name} is now SYNCED.")
 
-    ctx.session.is_ready_for_updates = True
-    ctx.server.trace.state("WORLD_SYNCED", player=ctx.session.player_id)
-    ctx.server.hooks.world_ready(ctx)
-    print(f">>> Snapshot sent. Client {ctx.session.name} is now SYNCED.")
+
+def announce_world(ctx: TcpContext, *, initial: bool = False) -> None:
+    """Use the same reliable map announcement for login and round changes."""
+    with ctx.session.world_lock:
+        ctx.session.world_change_event.clear()
+        if (not ctx.session.is_logged_in or ctx.session.stop_ping_event.is_set()
+                or (not initial and not ctx.session.world_announced)):
+            return  # An unfinished login announces the current map itself.
+        ctx.session.is_ready_for_updates = False
+        ctx.session.world_announced = False
+        ctx.send(WorldStatsPacket(map_name=ctx.server.current_map_name))
+        if not ctx.session.stop_ping_event.is_set():
+            ctx.session.world_announced = True
 
 @dispatcher.route(0x4F)
 def on_kudos(ctx: TcpContext, payload: bytes):
@@ -2703,7 +2725,7 @@ def broadcast(server: WulframServerContext, packet_data: bytes | Packet, exclude
     else:
         payload = packet_data
     
-    for session in server.sessions:
+    for session in tuple(server.sessions):
         # Skip not logged in or excluded sessions
         if not session.is_logged_in or session == exclude_session:
             continue
@@ -2713,8 +2735,12 @@ def broadcast(server: WulframServerContext, packet_data: bytes | Packet, exclude
             continue
             
         try:
-            # Prefer UDP (Reliable Stream 1 is typical for game events)
-            if session.udp_context:
+            if payload[:1] == b'\x16' and getattr(session, 'tcp_transport', None) is not None:
+                # The existing per-client control worker sends the latest map.
+                # One coalescing event bounds memory and keeps slow TCP writes
+                # (or an in-flight snapshot) out of the simulation thread.
+                session.world_change_event.set()
+            elif session.udp_context:
                 session.udp_context.send(payload)
         except Exception as e:
             print(f"[Broadcast] Error sending to {session.name}: {e}")
@@ -3030,8 +3056,6 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
             ctx.send(other_pkt)
             ctx.send(stats_packet(other_session))
 
-    ctx.send(WorldStatsPacket(map_name=ctx.server.current_map_name))
-
     if (not ctx.server.first_map_load):
         if not load_map_state(ctx.server, ctx.server.current_map_name):
             raise RuntimeError(
@@ -3040,5 +3064,5 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
         ctx.server.land.load(map_land_path(ctx.server, ctx.server.current_map_name))
         ctx.server.first_map_load = True
 
-    ctx.session.world_announced = True
+    announce_world(ctx, initial=True)
     start_ping_loop(ctx)

@@ -492,7 +492,6 @@ def _complete_map_change(server: Any, transition: MapChangeTransition) -> None:
         session.ground_dock_last_physics_tick = 0
         if not bool(getattr(session, "is_bot", False)):
             session.is_ready_for_updates = False
-            session.world_announced = True
 
     server.land = transition.replacement_land
     server.current_map_name = map_name
