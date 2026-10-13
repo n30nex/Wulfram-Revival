@@ -20,8 +20,11 @@ The 06:04 UTC soak observer was interrupted by an orderly Windows restart at
 06:31 UTC. Its last observation covered 24 minutes and 64 successful journeys.
 The unchanged Pi process continued, but later shared-host pressure pushed its
 cumulative dropped-tick rate above the target. The interrupted private instance
-was stopped after preserving its counters. A fresh, continuously observed
-24-hour run is required; the old receipt's `running` value is stale.
+was stopped after preserving its counters; the old receipt's `running` value is
+stale. Following the maintainer's October 13 direction, no further soak tests are
+planned or required. Qualification now uses short background checks on the
+development host and scoped service checks while leaving the live game available.
+Those checks do not establish multi-day uptime.
 
 Two client access violations at `wulfram2.exe+0xdc7e7` were localized to entity
 list cleanup, once after normal Quit and once after connection reset. They are
@@ -198,10 +201,12 @@ and writes a bounded JSONL trace plus an atomic summary. Runner/probe hashes bin
 the evidence to its test tools. Tick rate uses the server publication interval
 rather than including the observer's wait for its next sample. A restart, stale
 heartbeat or failed journey fails the run. A short smoke run can complete but
-can never pass the 24-hour gate. Check both `status == "completed"` and
-`passed == true`; recovery injection is a separate controlled exercise.
+can never establish 24-hour operation. This is historical tooling, retained for
+reproducibility; soak runs are no longer part of the active roadmap. Recovery
+injection remains a separate controlled exercise.
 
-Example from a separate load-driver computer (use its actual SSH identity,
+Historical invocation from a separate load-driver computer (do not launch as
+part of the current roadmap; use its actual SSH identity,
 the Pi address, a fresh output file and the candidate SHA):
 
 ```sh

@@ -68,15 +68,19 @@ record more specific dependencies.
 ### M1: Dependable public play
 
 - [#7: Qualify sessions and world updates under loss, delay and reconnects](https://github.com/n30nex/Wulfram-Revival/issues/7).
-- [#8: Prove unattended Pi operation and recovery over a full soak](https://github.com/n30nex/Wulfram-Revival/issues/8).
+- [#8: Verify bounded operating checks and service recovery](https://github.com/n30nex/Wulfram-Revival/issues/8).
 - [#9: Qualify Windows resolutions, HUD placement and actual input alignment](https://github.com/n30nex/Wulfram-Revival/issues/9).
 - [#10: Make the Windows download reproducible and qualify a clean first run](https://github.com/n30nex/Wulfram-Revival/issues/10).
 
 The display work covers login, team/map selection and gameplay. It must measure
 actual rendering and mouse alignment across supported resolutions, DPI settings
-and window transitions. The Pi checks include at least a 24-hour soak with all
-64 bots, map rotation and human connection churn. Package checks start from the
-public download on a clean, ordinary Windows account.
+and window transitions. Use short, targeted background checks on the development
+host for 64 bots, map changes and human connection churn, plus scoped service
+recovery checks. No soak tests are planned or required, following the maintainer's
+October 13 direction. Leave the live game available; do not rely on an unlocked
+desktop for background tests. Record each check's duration and limits without
+inferring long-term uptime. Package checks start from the public download on a
+clean, ordinary Windows account.
 
 ### M2: Tactical bots and a welcoming first match
 
