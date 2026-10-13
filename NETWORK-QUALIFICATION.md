@@ -128,6 +128,15 @@ none of these scripted results substitutes for that pending test.
 
 ## Remaining acceptance
 
+Alpha2.6 adds reliable map handovers and same-callsign reconnect checks. Dropping
+both UDP world announcements stalled both clients on the previous server.
+The candidate passed all 16 Crossroads-to-Mayhem handovers and reconnects with
+the 64-bot roster, plus a two-client Crossroads-to-Frontier case. The updated
+control worker, readiness ordering and broadcast iteration have regressions.
+See [alpha2.6 evidence](READINESS.md#live-alpha26-and-reliable-map-handovers-october-13-2026).
+These cases cover the recorded protocol paths; complete combat/fault combinations
+and preserved-client presentation remain open.
+
 The alpha2.5 update adds real loopback lifecycle checks and external team-change
 journeys, with explicit Tank/Scout identities, death/deletion notices and Scout
 fuel validation. All eight team-switch clients and all 16 connection-capacity
