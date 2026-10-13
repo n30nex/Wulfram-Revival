@@ -172,10 +172,14 @@ class TacticsTests(unittest.TestCase):
         bot.progress_check_at = 100
         server.bots._decide(bot,100)
         first = bot.entity.actions[3]
+        self.assertEqual(bot.entity.actions[5],0.)
         self.assertLess(bot.entity.actions[2],0)
+        server.bots._decide(bot,101.3)
+        self.assertEqual(bot.entity.actions[5],1.)
         server.bots._decide(bot,103)
         self.assertEqual(bot.entity.actions[3],-first)
         self.assertLess(bot.entity.actions[2],0)
+        self.assertEqual(bot.entity.actions[5],0.)
         self.assertGreater(bot.next_jump_at,103)
 
 

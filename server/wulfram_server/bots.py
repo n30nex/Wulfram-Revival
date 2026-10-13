@@ -535,6 +535,9 @@ class BotManager:
             bot.progress_position = entity.pos
             bot.progress_check_at = now+3
         if now < bot.recovery_until:
+            # Let a bouncing hull settle before lifting again. Holding full
+            # jets against a pad lip can defeat repeated reverse/strafe input.
+            entity.actions[5] = 0.0
             entity.actions[2] = -.65
             entity.actions[3] = .65*bot.recovery_side
             return
