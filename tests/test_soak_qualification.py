@@ -55,10 +55,13 @@ class SoakTests(unittest.TestCase):
         with self.assertRaises(ValueError): SOAK['read_sample'](self.sample(updated_utc=old),'a'*40,10)
 
     def test_short_runs_and_memory_growth_cannot_pass(self):
-        samples = [self.sample(),self.sample(300,map='mayhem'),self.sample(600,map='frontier')]
+        samples = [self.sample(),self.sample(300,map='mayhem',sessions=80),self.sample(600,map='frontier')]
         self.assertFalse(SOAK['assess'](samples,600,32)['passed'])
         samples.append(self.sample(86400))
         self.assertTrue(SOAK['assess'](samples,86400,32)['passed'])
+        samples[1]['sessions'] = 79
+        self.assertFalse(SOAK['assess'](samples,86400,32)['passed'])
+        samples[1]['sessions'] = 80
         samples[1]['spawned_bots'] = 63
         self.assertFalse(SOAK['assess'](samples,86400,32)['passed'])
         samples[1]['spawned_bots'] = 64
