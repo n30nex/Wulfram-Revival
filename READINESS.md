@@ -4,9 +4,38 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
-## Deployed candidate, October 12, 2026
+## Public server update, October 13, 2026
 
-The public server runs `0.4.0-alpha2.1`, source
+The public server now runs `0.4.0-alpha2.2`, source
+`e86e67d2e5663f1bb74b0f33152cd8683be0a74e`, integrated by
+[PR #25](https://github.com/n30nex/Wulfram-Revival/pull/25).
+An external Internet client verified login, full-health deployment, movement
+input, owner vitals and clean disconnect. The existing Windows download still
+returns the same published checksum and byte count. Server-only rollback is
+`/opt/canadaverse/wulfram/backups/20261013-stable-e86e67d/rollback.py`.
+
+A follow-up candidate, `675bdda2f763b330b28d5daed2c3c1eed87b57a6`
+(`0.4.0-alpha2.3`, Actions `38353241181`), fixes Mayhem pad starvation:
+the per-frame bot loop previously took openings before human retries arrived.
+Valid blocked human requests now give humans priority for 2.5 seconds, releasing
+on expiry, disconnect, team change or successful deployment. Invalid pads cannot
+reserve anything; all 64 bots remain in the match.
+
+Its two-minute private Mayhem check completed 16 real player journeys, observed
+80 simultaneous sessions and every bot deploying. It dropped 14 of 2940
+scheduled ticks (0.48%); peak process RSS was 83.7 MiB. The native artifact has
+the same verified SHA-256 as alpha2.2. The observer now continues sampling during
+connection waves and explicitly requires all 80 places to have been exercised.
+It fails if the observer pauses long enough to leave a gap in continuous coverage.
+
+Two earlier long-run attempts failed closed: an observer SSH timeout, then the
+Mayhem pad race. Neither is a completed 24-hour qualification. These fixes and
+79 Python regressions advance the roadmap; display, adverse-network, complete
+tactical and human-approval gates remain open.
+
+## Earlier deployment evidence, October 12, 2026
+
+The previous public server ran `0.4.0-alpha2.1`, source
 `0f6310b08c55342a0e1e3b337157c19d0af2b136`. The Windows package remains
 `0.4.0-alpha2`, source `906fba4896918328de55167abd2a66bcab7d05da`, from Actions
 run `38324818801`. Its ZIP SHA-256 is

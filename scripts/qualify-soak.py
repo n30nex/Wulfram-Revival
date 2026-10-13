@@ -60,10 +60,12 @@ def assess(samples, elapsed, journeys):
         'memory_within_budget': bool(memory) and max(memory) < 384*1024*1024,
         'memory_growth_bounded': bool(warm and tail) and sum(tail)/len(tail) <= sum(warm)/len(warm)*1.25+32*1024*1024,
         'repeated_16_player_churn': journeys >= 32,
+        'all_human_slots_exercised': max(sample['sessions'] for sample in samples) == 80,
     }
     return {'checks':checks,'passed':all(checks.values()),'physics_ticks':ticks,'dropped_ticks':dropped,
             'maps_seen':maps,'peak_live_by_map':peak_live,'spawned_by_map':spawned,'peak_rss_bytes':max(memory,default=None),
-            'successful_journeys':journeys,'elapsed_seconds':round(elapsed,2),'measured_seconds':measured}
+            'successful_journeys':journeys,'elapsed_seconds':round(elapsed,2),'measured_seconds':measured,
+            'peak_sessions':max(sample['sessions'] for sample in samples)}
 
 
 def main():
@@ -133,25 +135,13 @@ def main():
     save()
     try:
         next_churn = started
-        with trace.open('x',encoding='utf-8') as stream:
+        pending = []
+        with ThreadPoolExecutor(max_workers=16) as workers, trace.open('x',encoding='utf-8') as stream:
             while True:
                 now = time.monotonic()
-                sample = read_sample(fetch('qualification.json'),args.expected_revision,runtime['process_id'])
-                sample['elapsed_seconds'] = round(now-started,3)
-                if samples and (sample['physics_ticks'] < samples[-1]['physics_ticks']
-                                or sample['dropped_ticks'] < samples[-1]['dropped_ticks']):
-                    raise ValueError('cumulative simulation counters reset')
-                samples.append(sample)  # At most 8641 small samples (24h / 10s).
-                stream.write(json.dumps(sample)+'\n'); stream.flush()
-                report.update(assess(samples,now-started,journeys))
-                save()
-                if now-started >= args.seconds:
-                    break
-                if now >= next_churn and not sample['changing_map']:
-                    if hashlib.sha256((ROOT/'scripts/check-online.py').read_bytes()).hexdigest() != report['probe_sha256']:
-                        raise ValueError('probe changed during qualification')
-                    with ThreadPoolExecutor(max_workers=16) as workers:
-                        results = list(workers.map(probe,range(16)))
+                if pending and all(future.done() for future in pending):
+                    results = [future.result() for future in pending]
+                    pending = []
                     journeys += sum(bool(result['journey_passed']) for result in results)
                     failures = [result for result in results if not result['journey_passed']]
                     if failures:
@@ -160,11 +150,30 @@ def main():
                             'updates_missing_vitals','clean_disconnect')} for result in failures]
                         report['successful_journeys'] = journeys
                         raise ValueError('real login/spawn/disconnect journey failed')
-                    next_churn = time.monotonic()+300
+                    next_churn = now+300
+                sample = read_sample(fetch('qualification.json'),args.expected_revision,runtime['process_id'])
+                sample['elapsed_seconds'] = round(now-started,3)
+                if samples and sample['elapsed_seconds']-samples[-1]['elapsed_seconds'] > 45:
+                    raise ValueError('observer paused too long to qualify continuous operation')
+                if samples and (sample['physics_ticks'] < samples[-1]['physics_ticks']
+                                or sample['dropped_ticks'] < samples[-1]['dropped_ticks']):
+                    raise ValueError('cumulative simulation counters reset')
+                samples.append(sample)  # At most 8641 small samples (24h / 10s).
+                stream.write(json.dumps(sample)+'\n'); stream.flush()
+                report.update(assess(samples,now-started,journeys))
+                save()
+                if now-started >= args.seconds:
+                    if pending: raise ValueError('qualification ended before the connection wave completed')
+                    break
+                if not pending and now >= next_churn and not sample['changing_map'] and started+args.seconds-now >= 85:
+                    if hashlib.sha256((ROOT/'scripts/check-online.py').read_bytes()).hexdigest() != report['probe_sha256']:
+                        raise ValueError('probe changed during qualification')
+                    pending = [workers.submit(probe,index) for index in range(16)]
                 time.sleep(min(10,max(0,started+args.seconds-time.monotonic())))
         report['status'] = 'completed'
     except Exception as error:
-        report.update(status='failed',passed=False,error_type=type(error).__name__,error=str(error))
+        report.update(status='failed',passed=False,error_type=type(error).__name__,error=str(error),
+                      observer_elapsed_seconds=round(time.monotonic()-started,2))
     save()
     print(json.dumps(report,indent=2))
     # A short smoke run can complete successfully, but never passes the 24h gate.
