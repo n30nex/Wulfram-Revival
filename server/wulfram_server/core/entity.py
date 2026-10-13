@@ -153,11 +153,13 @@ class GameEntity:
     # each needs to retain changes until its next send.
     pending_mask: int = 0
     pending_view_mask: int = 0
+    dirty_generation: int = field(default=0, repr=False)
 
     def mark_dirty(self, mask: UpdateMask):
         """Flag specific fields to be sent in the next update."""
         self.pending_mask |= mask
         self.pending_view_mask |= mask
+        self.dirty_generation += 1
 
     def clear_update_dirty(self):
         """Reset flags consumed by remote update-array packets."""

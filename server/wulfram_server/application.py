@@ -278,6 +278,7 @@ class WulframServerContext:
 
         # ID Counters
         self._next_player_id = 1
+        self._player_id_lock = threading.Lock()
         
         # Shared State
         self.stop_event = threading.Event()
@@ -366,8 +367,9 @@ class WulframServerContext:
 
     def get_next_player_id(self) -> int:
         """Generates a unique Player/Account ID."""
-        pid = self._next_player_id
-        self._next_player_id += 1
+        with self._player_id_lock:
+            pid = self._next_player_id
+            self._next_player_id += 1
         return pid
 
     def enqueue_external_client_state(self, session: ClientSession, state: object) -> None:
@@ -1401,6 +1403,8 @@ def _broadcast_dirty_state(
 ) -> None:
     dirty_entities = server.entities.get_dirty_entities()
     view_dirty_entities = server.entities.get_view_dirty_entities()
+    update_versions = [(entity, entity.dirty_generation) for entity in dirty_entities]
+    view_versions = [(entity, entity.dirty_generation) for entity in view_dirty_entities]
     current_tick = get_ticks()
     # The retail client zero-initializes missing vitals (0x004e5db0) and
     # unconditionally applies them after every array (0x0047de72). Each
@@ -1490,9 +1494,9 @@ def _broadcast_dirty_state(
                     session.udp_context.send(b'\x0F' + payload)
 
     if send_update_arrays:
-        server.entities.clear_update_dirty_flags()
+        server.entities.clear_update_dirty_flags(update_versions)
     if send_view_updates:
-        server.entities.clear_view_dirty_flags()
+        server.entities.clear_view_dirty_flags(view_versions)
         server.hooks.after_view_broadcast(server)
 
 

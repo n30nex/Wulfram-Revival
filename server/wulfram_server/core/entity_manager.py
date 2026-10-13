@@ -1,5 +1,6 @@
 # core/entity_manager.py
 from typing import Dict, List, Optional
+import threading
 from wulfram_server.core.entity import GameEntity, UpdateMask
 from wulfram_server.network.packets.update_array import UpdateArrayPacket
 from wulfram_server.network.packets.gameplay import DeleteObjectPacket
@@ -11,6 +12,7 @@ class EntityManager:
     def __init__(self):
         self._entities: Dict[int, GameEntity] = {}
         self._next_net_id = 1  # Start at 1, 0 might be reserved or null
+        self._lock = threading.Lock()
 
     def create_entity(
         self,
@@ -24,11 +26,13 @@ class EntityManager:
         register: bool = True,
     ) -> GameEntity:
         """Creates, stores, and returns a new entity."""
-        if override_net_id is not None:
-            net_id = override_net_id
-        else:
-            net_id = self._next_net_id
-            self._next_net_id += 1
+        with self._lock:
+            if override_net_id is not None:
+                net_id = override_net_id
+                self._next_net_id = max(self._next_net_id, net_id + 1)
+            else:
+                net_id = self._next_net_id
+                self._next_net_id += 1
 
         entity = GameEntity(net_id=net_id, unit_type=unit_type, team_id=team_id)
         entity.pos = pos
@@ -61,25 +65,27 @@ class EntityManager:
         entity.mark_dirty(initial_mask)
         
         if register:
-            self._entities[net_id] = entity
+            self.register_entity(entity)
         return entity
 
     def register_entity(self, entity: GameEntity) -> None:
         """Publish a fully initialized entity using its reserved network ID."""
-        existing = self._entities.get(entity.net_id)
-        if existing is entity:
-            return
-        if existing is not None:
-            raise ValueError(f"network entity ID {entity.net_id} is already registered")
-        self._entities[entity.net_id] = entity
+        with self._lock:
+            existing = self._entities.get(entity.net_id)
+            if existing is entity:
+                return
+            if existing is not None:
+                raise ValueError(f"network entity ID {entity.net_id} is already registered")
+            self._entities[entity.net_id] = entity
 
     def remove_entity(self, net_id: int) -> Optional[DeleteObjectPacket]:
         """
         Removes the entity from the registry and returns the DeleteObjectPacket.
         The caller is responsible for broadcasting this packet.
         """
-        if net_id in self._entities:
-            del self._entities[net_id]
+        with self._lock:
+            removed = self._entities.pop(net_id, None)
+        if removed is not None:
             return DeleteObjectPacket(net_id=net_id)
         
         return None
@@ -88,29 +94,36 @@ class EntityManager:
         return self._entities.get(net_id)
 
     def get_all(self) -> List[GameEntity]:
-        return list(self._entities.values())
+        with self._lock:
+            return list(self._entities.values())
     
     def get_dirty_entities(self) -> List[GameEntity]:
         """Returns a list of all entities that have changed this tick."""
-        return [e for e in self._entities.values() if e.pending_mask > 0]
+        return [e for e in self.get_all() if e.pending_mask > 0]
 
     def get_view_dirty_entities(self) -> List[GameEntity]:
         """Returns entities awaiting an owner/view update."""
-        return [e for e in self._entities.values() if e.pending_view_mask > 0]
+        return [e for e in self.get_all() if e.pending_view_mask > 0]
 
-    def clear_update_dirty_flags(self):
+    def clear_update_dirty_flags(self, observed=None):
         """Clears changes consumed by remote update-array packets."""
-        for entity in self._entities.values():
-            entity.clear_update_dirty()
+        if observed is None:
+            observed = [(entity, entity.dirty_generation) for entity in self.get_all()]
+        for entity, generation in observed:
+            if entity.dirty_generation == generation:
+                entity.clear_update_dirty()
 
-    def clear_view_dirty_flags(self):
+    def clear_view_dirty_flags(self, observed=None):
         """Clears changes consumed by owner/view packets."""
-        for entity in self._entities.values():
-            entity.clear_view_dirty()
+        if observed is None:
+            observed = [(entity, entity.dirty_generation) for entity in self.get_all()]
+        for entity, generation in observed:
+            if entity.dirty_generation == generation:
+                entity.clear_view_dirty()
 
     def clear_all_dirty_flags(self):
         """Clears dirty flags for both packet streams."""
-        for e in self._entities.values():
+        for e in self.get_all():
             e.clear_dirty()
 
     # --- PACKET GENERATION ---
@@ -249,7 +262,7 @@ class EntityManager:
             | UpdateMask.HARD_SYNC
         )
         
-        for entity in self._entities.values():
+        for entity in self.get_all():
             # Pass the mask explicitly. Do NOT touch entity.pending_mask.
             packet.add_entity(
                 entity, 
@@ -265,7 +278,7 @@ class EntityManager:
         Used in the main 10Hz update loop.
         Automatically clears the dirty flags of processed entities.
         """
-        dirty_entities = [e for e in self._entities.values() if e.pending_mask > 0]
+        dirty_entities = self.get_dirty_entities()
         
         # OPTIMIZATION: If nothing changed, we MIGHT still want to send stats 
         # to keep the health bar synced, but usually we only send if entities move.
@@ -294,7 +307,7 @@ class EntityManager:
         Used in the main update loop.
         Automatically clears the dirty flags of processed entities.
         """
-        dirty_entities = [e for e in self._entities.values() if e.pending_mask > 0]
+        dirty_entities = self.get_dirty_entities()
         
         # OPTIMIZATION: If nothing changed, we MIGHT still want to send stats 
         # to keep the health bar synced, but usually we only send if entities move.
