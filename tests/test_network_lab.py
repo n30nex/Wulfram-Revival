@@ -64,6 +64,72 @@ class NetworkLabTests(unittest.TestCase):
             for _ in range(100): schedule.add('server',b'x'*4096,0)
         self.assertLessEqual(schedule.bytes,LAB['MAX_BUFFER'])
 
+    def test_datagram_delivery_is_counted_only_after_successful_send(self):
+        schedule = LAB['DatagramSchedule'](LAB['PROFILES']['clean'],2627)
+        schedule.add('server',b'\x0ctest-pong',0)
+        pending = schedule.due(0)
+        self.assertEqual(next(pending),('server',b'\x0ctest-pong'))
+        self.assertEqual(schedule.delivered['server'],0)
+        pending.close()  # A missing peer or failed send aborts the relay here.
+        self.assertEqual(schedule.delivered['server'],0)
+
+    def test_delayed_tcp_preserves_final_frames_in_both_half_close_directions(self):
+        errors = []
+        with tempfile.TemporaryDirectory() as folder, \
+                socket.socket(socket.AF_INET,socket.SOCK_STREAM) as upstream_tcp:
+            upstream_tcp.bind(('127.0.0.1',0)); upstream_tcp.listen(1); upstream_tcp.settimeout(5)
+            target = upstream_tcp.getsockname()
+            final_response = frame(b'\x22final-response')
+            def upstream():
+                try:
+                    connection,_ = upstream_tcp.accept()
+                    with connection:
+                        connection.settimeout(5)
+                        connection.sendall(hello(target[1]))
+                        incoming = bytearray()
+                        while len(incoming) < 5:
+                            data = connection.recv(5-len(incoming))
+                            if not data: raise EOFError('client FIN overtook its final frame')
+                            incoming.extend(data)
+                        self.assertEqual(incoming,b'\0\5\x21hi')
+                        self.assertEqual(connection.recv(1),b'')
+                        connection.sendall(final_response)
+                        connection.shutdown(socket.SHUT_WR)
+                except Exception as error: errors.append(error)
+            upstream_thread = threading.Thread(target=upstream,daemon=True)
+            upstream_thread.start()
+            report = Path(folder)/'report.json'
+            args = SimpleNamespace(upstream_ip=target[0],upstream_port=target[1],listen_port=0,
+                                   profile='latency',seed=2627,seconds=10,report=report)
+            result = []
+            relay_thread = threading.Thread(target=lambda:result.append(LAB['run'](args)),daemon=True)
+            relay_thread.start()
+            deadline = time.monotonic()+5
+            while not report.exists() and time.monotonic() < deadline: time.sleep(.01)
+            destination = ('127.0.0.1',json.loads(report.read_text())['listen_port'])
+            with socket.create_connection(destination,timeout=5) as client:
+                client.settimeout(5)
+                expected = hello(destination[1]); actual = bytearray()
+                while len(actual) < len(expected):
+                    data = client.recv(len(expected)-len(actual))
+                    if not data: raise EOFError('server FIN overtook its HELLO')
+                    actual.extend(data)
+                self.assertEqual(actual,expected)
+                client.sendall(b'\0\5\x21hi')
+                client.shutdown(socket.SHUT_WR)
+                actual = bytearray()
+                while data := client.recv(4096): actual.extend(data)
+                self.assertEqual(actual,final_response)
+            relay_thread.join(5); upstream_thread.join(5)
+            self.assertFalse(relay_thread.is_alive() or upstream_thread.is_alive())
+            self.assertFalse(errors)
+            self.assertEqual(result,[0])
+            document = json.loads(report.read_text())
+            self.assertEqual(document['status'],'complete')
+            self.assertEqual(document['closed_by'],'client')
+            self.assertEqual(document['tcp_bytes']['client'],5)
+            self.assertEqual(document['pending_udp_datagrams'],0)
+
     def test_loopback_relay_carries_tcp_and_udp_and_rejects_a_second_udp_peer(self):
         errors = []
         with tempfile.TemporaryDirectory() as folder, \

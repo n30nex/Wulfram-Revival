@@ -104,11 +104,12 @@ class DatagramSchedule:
         while self.queue and self.queue[0][0] <= now:
             _,_,side,ordinal,data = heapq.heappop(self.queue)
             self.bytes -= len(data)
+            # Resume only after the relay has successfully sent this datagram.
+            yield side,data
             self.delivered[side] += 1
             if ordinal < self.last_delivered[side]:
                 self.counts[f'{side}:delivered_out_of_order'] += 1
             self.last_delivered[side] = max(ordinal,self.last_delivered[side])
-            yield side,data
 
 
 def run(args):
@@ -152,6 +153,9 @@ def run(args):
             udp_peer = None
             server_input = bytearray()
             outputs = {client:deque(),server:deque()}
+            tcp_readers = {client,server}
+            tcp_eof = set()
+            fin_forwarded = set()
             queued_bytes = Counter()
             last_due = Counter()
             next_report = 0
@@ -169,10 +173,22 @@ def run(args):
                     try:
                         if side == 'client': up_udp.send(data)
                         elif udp_peer is not None: down_udp.sendto(data,udp_peer)
+                        else: raise ConnectionError('server datagram arrived before the client UDP peer')
                     except BlockingIOError:
                         raise BufferError('host could not deliver the selected profile')
+                # FIN follows all queued bytes in its direction. The opposite
+                # direction can still carry a final response after a half-close.
+                for source,destination in ((client,server),(server,client)):
+                    if source in tcp_eof and source not in fin_forwarded and not outputs[destination]:
+                        destination.shutdown(socket.SHUT_WR)
+                        fin_forwarded.add(source)
+                if len(fin_forwarded) == 2:
+                    report.update(status='complete',pending_udp_datagrams=len(schedule.queue),
+                                  pending_udp_bytes=schedule.bytes)
+                    save()
+                    return 0
                 writable = [sock for sock,queue in outputs.items() if queue and queue[0][0] <= now]
-                readable, writable, _ = select.select([client,server,down_udp,up_udp],writable,[],.005)
+                readable, writable, _ = select.select([*tcp_readers,down_udp,up_udp],writable,[],.005)
                 for sock in writable:
                     due,data = outputs[sock][0]
                     try: sent = sock.send(data)
@@ -185,9 +201,12 @@ def run(args):
                     if sock in (client,server):
                         data = sock.recv(65536)
                         if not data:
-                            report.update(status='complete',closed_by='client' if sock is client else 'server')
-                            save()
-                            return 0
+                            if sock is server and server_input:
+                                raise ValueError('server closed with an incomplete TCP frame')
+                            report.setdefault('closed_by','client' if sock is client else 'server')
+                            tcp_readers.remove(sock)
+                            tcp_eof.add(sock)
+                            continue
                         side = 'client' if sock is client else 'server'
                         report['tcp_bytes'][side] += len(data)
                         if sock is client:
