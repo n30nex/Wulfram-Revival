@@ -1,0 +1,93 @@
+from datetime import datetime, timezone, timedelta
+import json
+from pathlib import Path
+import runpy
+import subprocess
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from test_bots import make_server
+from wulfram_server.operations import write_qualification_status
+
+SOAK = runpy.run_path(str(Path(__file__).resolve().parents[1]/'scripts/qualify-soak.py'))
+PROBE = runpy.run_path(str(Path(__file__).resolve().parents[1]/'scripts/check-online.py'))
+
+
+class SoakTests(unittest.TestCase):
+    def test_observer_retries_one_transport_timeout_but_never_hides_failure(self):
+        run = SOAK['read_remote_state'].__globals__['subprocess']
+        timeout = subprocess.TimeoutExpired(['ssh'],10)
+        with patch.object(run,'run',side_effect=[timeout,SimpleNamespace(stdout='{"process_id":10}')]) as command:
+            document, retries = SOAK['read_remote_state'](['ssh'])
+            self.assertEqual((document['process_id'],retries),(10,1))
+            self.assertEqual(command.call_count,2)
+        with patch.object(run,'run',side_effect=timeout) as command:
+            with self.assertRaises(subprocess.TimeoutExpired): SOAK['read_remote_state'](['ssh'])
+            self.assertEqual(command.call_count,2)
+        with patch.object(run,'run',side_effect=subprocess.CalledProcessError(1,['ssh'])) as command:
+            with self.assertRaises(subprocess.CalledProcessError): SOAK['read_remote_state'](['ssh'])
+            self.assertEqual(command.call_count,1)
+
+    def test_load_client_sends_real_throttle_and_lift_controls(self):
+        from wulfram_server.application import parse_action_packet
+        from wulfram_server.network.streams import PacketReader
+        server = make_server()
+        bot = server.bots.add(team=1)
+        ctx = SimpleNamespace(server=server,session=bot)
+        decoded = parse_action_packet(ctx,PacketReader(PROBE['drive_packet'](99)[1:]),is_dump=False)
+        self.assertEqual([action for action,_,_ in decoded],[2,5])
+        for action in (2,5): self.assertAlmostEqual(bot.entity.actions[action],1,delta=.03)
+
+    def sample(self, seconds=0, **overrides):
+        return dict({'git_commit':'a'*40,'process_id':10,'updated_utc':(datetime.now(timezone.utc)+timedelta(seconds=seconds)).isoformat(),
+                     'bots':64,'sessions':64,'live_bots':62,'spawned_bots':64,'route_fields':80,'map':'crossroads',
+                     'changing_map':False,'physics_ticks':int(seconds*25),'dropped_ticks':0,
+                     'rss_bytes':100*1024*1024,'elapsed_seconds':seconds},**overrides)
+
+    def test_restarts_and_stale_snapshots_fail_closed(self):
+        sample = self.sample()
+        self.assertEqual(SOAK['read_sample'](sample,'a'*40,10)['bots'],64)
+        with self.assertRaises(ValueError): SOAK['read_sample'](sample,'b'*40,10)
+        with self.assertRaises(ValueError): SOAK['read_sample'](sample,'a'*40,11)
+        old = (datetime.now(timezone.utc)-timedelta(seconds=30)).isoformat()
+        with self.assertRaises(ValueError): SOAK['read_sample'](self.sample(updated_utc=old),'a'*40,10)
+
+    def test_short_runs_and_memory_growth_cannot_pass(self):
+        samples = [self.sample(),self.sample(300,map='mayhem'),self.sample(600,map='frontier')]
+        self.assertFalse(SOAK['assess'](samples,600,32)['passed'])
+        samples.append(self.sample(86400))
+        self.assertTrue(SOAK['assess'](samples,86400,32)['passed'])
+        samples[1]['spawned_bots'] = 63
+        self.assertFalse(SOAK['assess'](samples,86400,32)['passed'])
+        samples[1]['spawned_bots'] = 64
+        samples[-1]['rss_bytes'] *= 3
+        self.assertFalse(SOAK['assess'](samples,86400,32)['passed'])
+
+    def test_tick_rate_uses_the_published_counter_interval(self):
+        # The final 5-second publication can lag behind a 90-second observer.
+        samples = [self.sample(),self.sample(85)]
+        result = SOAK['assess'](samples,90,16)
+        self.assertTrue(result['checks']['simulation_rate'])
+        self.assertFalse(result['passed'])
+        samples[-1]['physics_ticks'] = 1900
+        self.assertFalse(SOAK['assess'](samples,90,16)['checks']['simulation_rate'])
+
+    def test_private_export_is_bounded_and_omits_player_identity(self):
+        server = make_server()
+        server.bots.add('Private Callsign',1)
+        server.release_identity = SimpleNamespace(git_commit='a'*40)
+        server.current_map_name = 'crossroads'
+        server.physics.metrics = SimpleNamespace(ticks=55,dropped_catch_up_ticks=1)
+        with tempfile.TemporaryDirectory() as directory:
+            server.cfg = SimpleNamespace(runtime=SimpleNamespace(state_directory=Path(directory)))
+            for _ in range(3): write_qualification_status(server)
+            self.assertEqual(len(list(Path(directory).iterdir())),1)
+            raw = (Path(directory)/'qualification.json').read_text()
+            self.assertNotIn('Private Callsign',raw)
+            self.assertNotIn('address',raw)
+            self.assertEqual(json.loads(raw)['physics_ticks'],55)
+
+
+if __name__ == '__main__': unittest.main()

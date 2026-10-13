@@ -1,0 +1,175 @@
+"""Measure one exact staging server for up to 24 hours, including real sessions."""
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+import json
+import hashlib
+from pathlib import Path, PurePosixPath
+import re
+import shlex
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read_remote_state(command):
+    for attempt in range(2):
+        try:
+            result = subprocess.run(command,capture_output=True,text=True,timeout=10,check=True)
+            return json.loads(result.stdout), attempt
+        except (subprocess.TimeoutExpired,subprocess.CalledProcessError) as error:
+            if attempt or (isinstance(error,subprocess.CalledProcessError) and error.returncode != 255):
+                raise
+
+
+def read_sample(sample, revision, pid=None):
+    age = (datetime.now(timezone.utc)-datetime.fromisoformat(sample['updated_utc'])).total_seconds()
+    if sample['git_commit'] != revision or (pid is not None and sample['process_id'] != pid):
+        raise ValueError('candidate changed or server restarted')
+    if not -5 <= age <= 25:
+        raise ValueError('simulation heartbeat is stale')
+    if sample['bots'] != 64 or not 64 <= sample['sessions'] <= 80:
+        raise ValueError('64 bots plus 16 human places were not preserved')
+    if sample['route_fields'] > 128:
+        raise ValueError('route cache exceeded its bound')
+    return sample
+
+
+def assess(samples, elapsed, journeys):
+    first, last = samples[0], samples[-1]
+    ticks = last['physics_ticks']-first['physics_ticks']
+    dropped = last['dropped_ticks']-first['dropped_ticks']
+    measured = (datetime.fromisoformat(last['updated_utc'])-datetime.fromisoformat(first['updated_utc'])).total_seconds()
+    maps = sorted({sample['map'] for sample in samples if not sample['changing_map']})
+    peak_live = {name:max(s['live_bots'] for s in samples if s['map']==name) for name in maps}
+    spawned = {name:max(s['spawned_bots'] for s in samples if s['map']==name) for name in maps}
+    memory = [sample['rss_bytes'] for sample in samples if sample['rss_bytes'] is not None]
+    # Compare after the first five minutes to allow initial spawns/cache warming.
+    warm = [s['rss_bytes'] for s in samples if 300 <= s['elapsed_seconds'] <= 600 and s['rss_bytes'] is not None]
+    tail = [s['rss_bytes'] for s in samples if s['elapsed_seconds'] >= elapsed-300 and s['rss_bytes'] is not None]
+    checks = {
+        'full_24_hours': elapsed >= 86400,
+        'all_rotation_maps': set(maps) >= {'crossroads','mayhem','frontier'},
+        'all_bots_spawn_on_each_map': bool(spawned) and all(count == 64 for count in spawned.values()),
+        # Status files are published every 5s. Their counter interval, not the
+        # observer's sleep interval, is the denominator for measured tick rate.
+        'simulation_rate': measured > 0 and ticks >= .95*measured*25,
+        'dropped_ticks_below_one_percent': 0 <= dropped < max(1,(ticks+dropped)*.01),
+        'memory_within_budget': bool(memory) and max(memory) < 384*1024*1024,
+        'memory_growth_bounded': bool(warm and tail) and sum(tail)/len(tail) <= sum(warm)/len(warm)*1.25+32*1024*1024,
+        'repeated_16_player_churn': journeys >= 32,
+    }
+    return {'checks':checks,'passed':all(checks.values()),'physics_ticks':ticks,'dropped_ticks':dropped,
+            'maps_seen':maps,'peak_live_by_map':peak_live,'spawned_by_map':spawned,'peak_rss_bytes':max(memory,default=None),
+            'successful_journeys':journeys,'elapsed_seconds':round(elapsed,2),'measured_seconds':measured}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--state-directory',required=True)
+    parser.add_argument('--ssh-target',help='read Pi state through SSH while generating player traffic on this computer')
+    parser.add_argument('--ssh-identity',type=Path)
+    parser.add_argument('--expected-revision',required=True)
+    parser.add_argument('--host',required=True)
+    parser.add_argument('--expected-ip',required=True)
+    parser.add_argument('--port',type=int,required=True)
+    parser.add_argument('--seconds',type=int,default=86400,choices=range(15,86401),metavar='15..86400')
+    parser.add_argument('--output',type=Path,required=True)
+    args = parser.parse_args()
+    if not re.fullmatch('[a-f0-9]{40}',args.expected_revision):
+        parser.error('expected revision must be a complete commit SHA')
+    if args.ssh_target and (not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*@[A-Za-z0-9][A-Za-z0-9.-]*',args.ssh_target)
+                            or args.ssh_identity is None or not args.ssh_identity.is_file()
+                            or not PurePosixPath(args.state_directory).is_absolute()):
+        parser.error('SSH requires an explicit user@host, existing identity file and absolute Pi state path')
+
+    observer_read_retries = 0
+    def fetch(filename):
+        nonlocal observer_read_retries
+        if not args.ssh_target:
+            return json.loads((Path(args.state_directory)/filename).read_text())
+        command = ['ssh','-i',str(args.ssh_identity),'-o','IdentitiesOnly=yes','-o','BatchMode=yes',
+                   '-o','StrictHostKeyChecking=yes',args.ssh_target,
+                   'sudo -n cat -- '+shlex.quote(str(PurePosixPath(args.state_directory)/filename))]
+        result, retries = read_remote_state(command)
+        observer_read_retries += retries
+        return result
+
+    runtime = fetch('runtime.json')
+    if (runtime['environment'] != 'staging' or runtime['status'] != 'ready'
+            or runtime['git_commit'] != args.expected_revision
+            or runtime['tcp_port'] != args.port or runtime['udp_port'] != args.port):
+        parser.error('load qualification requires the exact ready staging server and port')
+    args.output.parent.mkdir(parents=True,exist_ok=True)
+    trace = args.output.with_suffix('.jsonl')
+    if args.output.exists() or trace.exists():
+        parser.error('refusing to overwrite an earlier qualification run')
+    samples, journeys = [], 0
+    started = time.monotonic()
+    report = {'status':'running','git_commit':args.expected_revision,'passed':False,
+              'harness_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+              'probe_sha256':hashlib.sha256((ROOT/'scripts/check-online.py').read_bytes()).hexdigest()}
+
+    def save():
+        report['observer_read_retries'] = observer_read_retries
+        temporary = args.output.with_suffix('.tmp')
+        temporary.write_text(json.dumps(report,indent=2)+'\n')
+        temporary.replace(args.output)
+
+    def probe(index):
+        # Keep 16 connected players without tripping the intentional four
+        # unauthenticated connections/IP limit. This is a capacity/soak test.
+        time.sleep(index*.4)
+        command = [sys.executable,str(ROOT/'scripts/check-online.py'),'--host',args.host,
+                   '--expected-ip',args.expected_ip,'--port',str(args.port),'--team',str(1+index%2),
+                   '--bots','64','--seconds','35','--drive']
+        result = subprocess.run(command,capture_output=True,text=True,timeout=75)
+        document = json.loads(result.stdout)
+        document['journey_passed'] = not result.returncode and document.get('passed') and document.get('clean_disconnect')
+        return document
+
+    save()
+    try:
+        next_churn = started
+        with trace.open('x',encoding='utf-8') as stream:
+            while True:
+                now = time.monotonic()
+                sample = read_sample(fetch('qualification.json'),args.expected_revision,runtime['process_id'])
+                sample['elapsed_seconds'] = round(now-started,3)
+                if samples and (sample['physics_ticks'] < samples[-1]['physics_ticks']
+                                or sample['dropped_ticks'] < samples[-1]['dropped_ticks']):
+                    raise ValueError('cumulative simulation counters reset')
+                samples.append(sample)  # At most 8641 small samples (24h / 10s).
+                stream.write(json.dumps(sample)+'\n'); stream.flush()
+                report.update(assess(samples,now-started,journeys))
+                save()
+                if now-started >= args.seconds:
+                    break
+                if now >= next_churn and not sample['changing_map']:
+                    if hashlib.sha256((ROOT/'scripts/check-online.py').read_bytes()).hexdigest() != report['probe_sha256']:
+                        raise ValueError('probe changed during qualification')
+                    with ThreadPoolExecutor(max_workers=16) as workers:
+                        results = list(workers.map(probe,range(16)))
+                    journeys += sum(bool(result['journey_passed']) for result in results)
+                    failures = [result for result in results if not result['journey_passed']]
+                    if failures:
+                        report['failed_journeys'] = [{key:result.get(key) for key in (
+                            'phase','error_type','spawn_received','spawn_health','movement_inputs_sent',
+                            'updates_missing_vitals','clean_disconnect')} for result in failures]
+                        report['successful_journeys'] = journeys
+                        raise ValueError('real login/spawn/disconnect journey failed')
+                    next_churn = time.monotonic()+300
+                time.sleep(min(10,max(0,started+args.seconds-time.monotonic())))
+        report['status'] = 'completed'
+    except Exception as error:
+        report.update(status='failed',passed=False,error_type=type(error).__name__,error=str(error))
+    save()
+    print(json.dumps(report,indent=2))
+    # A short smoke run can complete successfully, but never passes the 24h gate.
+    return 0 if report['status']=='completed' else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

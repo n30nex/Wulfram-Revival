@@ -214,6 +214,7 @@ class ProductionHooks(ServerHooks):
         self._next_public_status_at = now + 5.0
         try:
             operations.write_public_match_status(server)
+            operations.write_qualification_status(server)
             # Only a completed simulation/broadcast iteration refreshes the
             # watchdog. A hung main loop cannot claim the game is healthy.
             operations.notify_supervisor("WATCHDOG=1")

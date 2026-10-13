@@ -68,6 +68,7 @@ from wulfram_server.network.packets.packet_logger import PacketLogger
 
 from wulfram_server.core.entity import (
     GameEntity,
+    SPAWN_PROTECTION_SECONDS,
     PendingTransientEvent,
     TEAM_SIDE_BY_ID,
     UpdateMask,
@@ -170,6 +171,7 @@ class ClientSession:
         # ahead of the UDP D_HANDSHAKE exchange.
         self.d_handshake_sent_event = threading.Event()
         self.d_handshake_ack_event = threading.Event()
+        self.udp_handshake_replies: tuple[bytes, ...] = ()
         self.server.hooks.initialize_session(self)
 
     def cleanup(self):
@@ -642,6 +644,7 @@ class UdpContext:
         else:
             payload = payload
 
+
         self.transport.send(payload, self.addr)
         self.server.trace.packet(
             "server_to_client",
@@ -717,6 +720,8 @@ def _note_entity_spawn(
     source: str,
 ) -> None:
     entity.score_owner_id = session.player_id
+    entity.spawn_protection_remaining = SPAWN_PROTECTION_SECONDS
+    entity.spawn_protection_notice_pending = not getattr(session, "is_bot", False)
     session.death_cleanup_at = 0.0
     session.death_delete_explosion = False
     entity.is_docked = False
@@ -726,6 +731,16 @@ def _note_entity_spawn(
     session.ground_dock_reference_rot = None
     session.ground_dock_last_physics_tick = 0
     session.server.hooks.entity_spawned(session, entity, source)
+
+
+def _update_spawn_protection_notices(server: WulframServerContext) -> None:
+    for session in tuple(server.sessions):
+        entity = session.entity
+        if (entity is not None and entity.spawn_protection_notice_pending
+                and entity.spawn_protection_remaining <= 0):
+            entity.spawn_protection_notice_pending = False
+            if session.is_logged_in and session.udp_context and entity.health_points > 0:
+                send_system_message(session.udp_context, "Spawn shield ended. You can now take damage.")
 
 
 def switch_session_team(context: TcpContext | UdpContext, team_id: int) -> bool:
@@ -1628,6 +1643,7 @@ def global_game_loop(server: WulframServerContext):
 
         admin_commands.check_win_condition(server)
 
+        _update_spawn_protection_notices(server)
         _update_ground_docking(server)
 
         # Accepted jump traces are gameplay events rather than periodic state.
@@ -1956,14 +1972,20 @@ def on_d_handshake(ctx: UdpContext, reader: PacketReader):
         connection_id=conn_id,
         stream_count=stream_count,
     )
-    ctx.session.d_handshake_sent_event.clear()
-    ctx.session.d_handshake_ack_event.clear()
-    
     # 1. Send Handshake ACK (SubCmd 0)
     pkt = PacketWriter()
     pkt.write_byte(0) # SubCmd
     pkt.write_int32(get_ticks())
-    ctx.send(b'\x02' + pkt.get_bytes())
+    acknowledgement = b'\x02' + pkt.get_bytes()
+    if ctx.session.d_handshake_ack_event.is_set():
+        # A delayed retry must not reset streams after the world is live.
+        ctx.send(acknowledgement)
+        return
+    if ctx.session.udp_handshake_replies:
+        for reply in ctx.session.udp_handshake_replies:
+            ctx.send(reply)
+        return
+    replies = [acknowledgement]
 
     # 2. Send Our Handshake Definitions
     # (Simplified for brevity, full impl in original udp_handler)
@@ -2004,7 +2026,7 @@ def on_d_handshake(ctx: UdpContext, reader: PacketReader):
     pkt_hs.write_int32(2); pkt_hs.write_int32(1)
     pkt_hs.write_int32(3); pkt_hs.write_int32(1)
 
-    ctx.send(b'\x03' + pkt_hs.get_bytes())
+    replies.append(b'\x03' + pkt_hs.get_bytes())
     # end handshake
 
     print("[UDP] Synchronizing Streams...")
@@ -2014,14 +2036,19 @@ def on_d_handshake(ctx: UdpContext, reader: PacketReader):
     p1 = PacketWriter()
     p1.write_byte(1) # Stream Id
     p1.write_int16(1) # Sequence
-    ctx.send(b'\x04' + p1.get_bytes())
+    replies.append(b'\x04' + p1.get_bytes())
 
     # Stream 3
     p3 = PacketWriter()
     p3.write_byte(3) # Stream Id
     p3.write_int16(1) # Sequence
-    ctx.send(b'\x04' + p3.get_bytes())
+    replies.append(b'\x04' + p3.get_bytes())
+    ctx.session.udp_handshake_replies = tuple(replies)
+    # Publish the barrier before sending: an ACK can arrive as soon as the
+    # peer sees the handshake, before the final stream record leaves us.
     ctx.session.d_handshake_sent_event.set()
+    for reply in replies:
+        ctx.send(reply)
 
 @dispatcher.datagram_route(0x08)
 def on_root_hello(ctx: UdpContext, reader: PacketReader):
@@ -2158,6 +2185,14 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
             ctx.send(ReincarnatePacket(code=4))
             return
 
+        current = ctx.session.entity
+        if current is not None and current.is_manned and current.health_points > 0:
+            # A retry or another pad click must not heal an active vehicle or
+            # renew its spawn shield. Re-send its actual state instead.
+            send_current_tank(ctx)
+            ctx.send(ReincarnatePacket(code=11))
+            return
+
         net_id = team_id_or_repaid_pad
         print(f"    > RECV REINCARNATE (SPAWN REQ): Unit ID: {unit_id} | net_id #{net_id}")
         print(f"    > Unknown values: {unk_int3} | {unk_int4}")
@@ -2215,6 +2250,7 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
             # ID. Tank is table 0 and Scout is table 1; using table 0 for both only
             # appeared to work while the Tank table contained no enabled channels.
             ctx.session.entity.weapon_table_id = unit_id
+            _note_entity_spawn(ctx.session, new_entity, "reincarnate")
             physics = getattr(ctx.server, "physics", None)
             if physics is not None:
                 physics.finalize_spawn_pose(new_entity, ctx.server.land)
@@ -2225,27 +2261,16 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
             # after their complete pose is ready.
             ctx.server.entities.register_entity(new_entity)
         ctx.session.construction_ready_at = 0.0
-        _note_entity_spawn(ctx.session, new_entity, "reincarnate")
 
         # 3. Notify the Client
         send_system_message(
             ctx,
-            f"{loadout.title()} deployed.",
+            f"{loadout.title()} deployed. Spawn shield: {SPAWN_PROTECTION_SECONDS:g} seconds; firing ends it.",
         )
 
         # 4. Send TankPacket with the NEW Dynamic ID
         # The client will receive this and now know "I am NetID X"
-        pkt = TankPacket(
-            net_id=new_entity.net_id,
-            sequence_id=get_ticks(),
-            tank_cfg=ctx.server.packet_cfg.tank,
-            team_id=ctx.session.team,
-            unit_type=unit_id,
-            weapon_table_id=new_entity.weapon_table_id,
-            pos=new_entity.pos,
-            rot=new_entity.rot
-        )
-        ctx.send(pkt)
+        send_current_tank(ctx)
         # ProcessReincarnatePacket clears the client's pending-request flag on
         # every response; code 11 is the recovered "Request Granted" result.
         ctx.send(ReincarnatePacket(code=11))
@@ -2316,7 +2341,25 @@ def on_tank_resend_request(ctx: UdpContext, reader: PacketReader):
     # sequence number after the opcode.
     sequence_num = reader.read_int16()
     ctx.send_ack(packet_id=0x19, seq_num=sequence_num)
+    if ctx.session and ctx.session.request_rate.allow("tank_resend"):
+        send_current_tank(ctx)
     ctx.server.hooks.tank_resend_requested(ctx, sequence_num)
+
+
+def send_current_tank(ctx: UdpContext) -> None:
+    """The retail client requests a lost TANK over its reliable UDP channel."""
+    entity = ctx.session.entity
+    if entity is None or not entity.is_manned or entity.health_points <= 0:
+        return
+    # Preserve the retail TANK path and honor its native resend requests;
+    # snapshots and lifecycle messages have separate delivery requirements.
+    ctx.send(TankPacket(
+        net_id=entity.net_id, sequence_id=get_ticks(), tank_cfg=ctx.server.packet_cfg.tank,
+        team_id=entity.team_id, unit_type=entity.unit_type, pos=entity.pos, rot=entity.rot,
+        weapon_table_id=entity.weapon_table_id, weapon_ready_mask=entity.weapon_ready_mask,
+        pulse_charge=entity.pulse_charge, repair_charge=entity.repair_charge,
+        health=entity.health, energy=entity.energy,
+    ))
 
 
 @dispatcher.datagram_route(0x20)
@@ -2773,40 +2816,35 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
     # absolute deadline and pending-connection limits still bound idle peers.
     login_deadline = time.monotonic() + 120.0
     
-    # Wait for the login_received event (triggered by on_login_request)
-    while not ctx.session.login_received.is_set():
-        payload = ctx.transport.recv_payload(deadline=login_deadline)
-        if not payload or not ctx.session.tcp_rate.allow():
-            raise ConnectionError("Login connection closed or rate exceeded")
-        dispatcher.dispatch_payload(ctx, payload)
-            
-    print(f">>> Username Found: {ctx.session.name}")
-
-    if ctx.session.login_subcommand != 3:
-        print(">>> Requesting Password (Status Code 1)...")
-        ctx.send(LoginStatusPacket(code=1, is_donor=True))
-
-        print(">>> Waiting for password (LOGIN 0x21)...")
-        while True:
+    for attempt in range(5):
+        while not ctx.session.login_received.is_set():
             payload = ctx.transport.recv_payload(deadline=login_deadline)
-            if payload is None:
-                raise ConnectionError("Client disconnected during password stage.")
-            if not ctx.session.tcp_rate.allow():
-                raise ConnectionError("Login request rate exceeded")
+            if not payload or not ctx.session.tcp_rate.allow():
+                raise ConnectionError("Login connection closed or rate exceeded")
             dispatcher.dispatch_payload(ctx, payload)
 
-            ctx.server.logger.log_packet(
-                    "TCP-LOGIN",
-                    payload,
-                    show_ascii=True,
-                    include_tcp_len_prefix=True
-                )
+        if ctx.session.login_subcommand != 3:
+            ctx.send(LoginStatusPacket(code=1, is_donor=True))
+            ctx.session.login_received.clear()
+            while not ctx.session.login_received.is_set():
+                payload = ctx.transport.recv_payload(deadline=login_deadline)
+                if not payload or not ctx.session.tcp_rate.allow():
+                    raise ConnectionError("Password connection closed or rate exceeded")
+                dispatcher.dispatch_payload(ctx, payload)
 
-            if payload and payload[0] == 0x21:
-                break
-
-    if ctx.session.stop_ping_event.is_set() or not ctx.server.hooks.authenticate(ctx.session):
-        raise PermissionError(f"login rejected for {ctx.session.name!r}")
+        if ctx.session.stop_ping_event.is_set():
+            raise ConnectionError("Login connection closed")
+        accepted = ctx.server.hooks.authenticate(ctx.session)
+        ctx.session.supplied_password = ""
+        if accepted:
+            break
+        # Retail ProcessLoginStatus (0x4617f0), jump-table entry 6, displays
+        # "Invalid password specified. Try again." and reopens login.
+        ctx.send(LoginStatusPacket(code=6, is_donor=True))
+        ctx.session.login_received.clear()
+        print(f"[login] password rejected; retry={attempt + 1}")
+    else:
+        raise PermissionError("Login attempt limit reached")
 
     with ctx.server._login_lock:
         if any(s is not ctx.session and s.is_logged_in and s.name.casefold() == ctx.session.name.casefold()
@@ -2839,9 +2877,17 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
     # its acknowledgement of our D_HANDSHAKE before sending world state over
     # TCP; otherwise the independent transport threads can reorder bootstrap
     # ahead of transport readiness and crash the canonical client.
-    if (not ctx.session.d_handshake_ack_event.wait(timeout=5.0)
-            or ctx.session.stop_ping_event.is_set()):
-        raise ConnectionError("UDP D_HANDSHAKE acknowledgement timed out")
+    handshake_deadline = time.monotonic() + 8.0
+    while not ctx.session.d_handshake_ack_event.wait(timeout=.5):
+        if time.monotonic() >= handshake_deadline or ctx.session.stop_ping_event.is_set():
+            raise ConnectionError("UDP D_HANDSHAKE acknowledgement timed out")
+        # Both HELLO verified and the stream handshake travel over UDP. Keep
+        # the bounded bootstrap alive when either direction loses a datagram.
+        replies = ctx.session.udp_handshake_replies or (HelloPacket.create_verified().serialize(),)
+        for reply in replies:
+            ctx.session.udp_context.send(reply)
+    if ctx.session.stop_ping_event.is_set():
+        raise ConnectionError("Login connection closed")
     ctx.server.trace.state(
         "UDP_TRANSPORT_READY",
         player=ctx.session.player_id,

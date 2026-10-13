@@ -14,6 +14,12 @@ def ridge(with_gap=True):
 
 
 class NavigationTests(unittest.TestCase):
+    def test_tactical_goals_keep_clearance_from_the_world_boundary(self):
+        routes = TerrainRoutes(ridge())
+        goal = routes.reachable_near((15.,65.),(-200.,65.))
+        self.assertGreaterEqual(goal[0],15.)
+        self.assertFalse(routes.clear_line((15.,65.),(-200.,65.)))
+
     def test_route_goes_around_ridge_without_cutting_corners(self):
         routes = TerrainRoutes(ridge())
         position,goal = (15.,15.),(65.,15.)

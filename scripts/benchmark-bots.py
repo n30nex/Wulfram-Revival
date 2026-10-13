@@ -118,6 +118,9 @@ def main():
                                         "fields_built":server.bots.navigation.fields_built,
                                         "stalled_bots":stalled,"engaging_bots":engaging,
                                         "orders":dict(Counter(bot.order for bot in active)),
+                                        "spawned_bots":sum(bot.is_bot and bot.spawn_position is not None
+                                                           and bot.spawned_terrain == (server.land.identity,server.land.revision)
+                                                           for bot in server.bots.bots),
                                         "unique_goals":len({bot.goal for bot in active if bot.goal is not None}),
                                         "positions":[[bot.player_id,bot.team,bot.role,round(bot.entity.pos[0]),round(bot.entity.pos[1])]
                                                      for bot in active]})
@@ -142,11 +145,15 @@ def main():
                 report['peak_live_by_map']={name:max(s['live_bots'] for s in samples if s['map']==name)
                                             for name in report['maps_seen']}
                 report['bots_ever_spawned']=sum(bot.is_bot and bot.spawn_position is not None for bot in server.bots.bots)
+                report['spawned_by_map']={name:max(s['spawned_bots'] for s in samples if s['map']==name)
+                                          for name in report['maps_seen']}
                 report['phases'] = {name:{'calls':len(values),'seconds':round(sum(values),3),
                                          'max_ms':round(max(values,default=0)*1000,3)}
                                     for name,values in phase_times.items()}
                 report["passed"] = (report["bots"] == args.bots and metrics.ticks >= .95 * args.seconds * 25
-                                    and report["peak_live_bots"] == args.bots
+                                    # Dead players remain match participants. Require every
+                                    # bot to deploy on each map, not to be alive simultaneously.
+                                    and all(count == args.bots for count in report['spawned_by_map'].values())
                                     and metrics.dropped_catch_up_ticks <= max(1, metrics.ticks // 100)
                                     and traffic["max_update_bytes"] <= 1200
                                     and (not args.clients or traffic["datagrams"] > 0))

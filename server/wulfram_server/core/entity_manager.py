@@ -129,6 +129,14 @@ class EntityManager:
     # --- PACKET GENERATION ---
 
     def _bounded_packets(self, entities, build):
+        # Retail records usually occupy 35-45 bytes. Start with a plausible
+        # datagram rather than serializing the entire 80-player world, throwing
+        # it away, then repeatedly serializing both halves for every recipient.
+        # The byte check below remains authoritative for unusually large records.
+        if len(entities) > 24:
+            for start in range(0,len(entities),24):
+                yield from self._bounded_packets(entities[start:start+24],build)
+            return
         # Every chunk carries the same simulation timestamp. The retail
         # decoder applies that timestamp per entity, not per datagram.
         payload = build(entities) if len(entities) <= 255 else None

@@ -64,6 +64,7 @@ class BotSession:
     progress_check_at: float = 0.0
     recovery_until: float = 0.0
     spawn_position: tuple[float,float,float] | None = None
+    spawned_terrain: tuple[str,int] | None = None
     furthest_travel: float = 0.0
     engaging: bool = False
     tactical_slot: int = 0
@@ -72,6 +73,8 @@ class BotSession:
     goal: tuple[float, float] | None = None
     objective_id: int = 0
     target_id: int = 0
+    fire_ready_at: float = 0.0
+    regroup_until: float = 0.0
     approach_done: bool = False
     next_plan_at: float = 0.0
     wants_move: bool = False
@@ -231,6 +234,7 @@ class BotManager:
             unit_type=LOADOUTS[bot.vehicle_loadout][0],
             team_id=bot.team,
             pos=spawn_pos,
+            register=False,
         )
         entity.rot = pad.rot
         entity.is_manned = True
@@ -242,18 +246,24 @@ class BotManager:
         bot.next_jump_at = math.inf
         bot.jump_release_at = None
         bot.spawn_position = spawn_pos
+        land = getattr(self.server,'land',None)
+        bot.spawned_terrain = (land.identity,land.revision) if land is not None else None
         bot.progress_position = spawn_pos
         bot.progress_check_at = now+3
         bot.recovery_until = 0
         bot.engaging = False
         bot.next_plan_at = 0
         bot.objective_id = 0
+        bot.target_id = 0
+        bot.fire_ready_at = 0
+        bot.regroup_until = 0
         bot.approach_done = False
         bot.goal = None
 
         from wulfram_server import application as app
 
         app._note_entity_spawn(bot, entity, "bot_respawn")
+        self.server.entities.register_entity(entity)
         app.broadcast(self.server, BirthNoticePacket(
             player_id=bot.player_id,
             entity_id=entity.net_id,
@@ -387,8 +397,10 @@ class BotManager:
             bot.order = 'resupply' if service_targets else 'support'
             bot.goal = (support.pos[:2] if service_targets else
                         tuple(math.floor(value/200)*200+100 for value in support.pos[:2]))
+        elif now < bot.regroup_until:
+            bot.order = 'regroup'
         else:
-            if bot.order in ('resupply','support'):
+            if bot.order in ('resupply','support','regroup'):
                 bot.next_plan_at = 0
             if now >= bot.next_plan_at:
                 self._plan(bot,now,targets)
@@ -411,30 +423,59 @@ class BotManager:
             nearby = ([support] if healing_targets and math.dist(entity.pos,support.pos) <= combat.repair_range else [])
         nearby.sort(key=lambda unit: (unit.unit_type not in (0,1),
                                     math.dist(entity.pos,unit.pos)*(0.75 if unit.net_id == bot.target_id else 1)))
-        target = None
+        visible_targets = []
         origin = tuple(entity.pos[index]+forward[index]*4.5 for index in range(3))
         for candidate in nearby[:3]:
             hit = self.server.physics.trace_segment(origin,candidate.pos,ignored_entity=entity.net_id)
             if hit['hit'] and int(hit['entity_id']) == candidate.net_id:
-                target = candidate
-                break
+                visible_targets.append(candidate)
+        target = next(iter(visible_targets),None)
         visible = target is not None
-        bot.engaging = visible
-        bot.target_id = target.net_id if target is not None else 0
+        target_id = target.net_id if target is not None else 0
+        if target_id != bot.target_id:
+            # Losing sight or changing targets requires a fresh human-scale
+            # reaction. Ordinary turn speed, scatter and cooldowns still apply.
+            bot.fire_ready_at = now + bot.rng.uniform(.35,.65)
+        bot.target_id = target_id
+        threats = [unit for unit in visible_targets if unit.team_id != bot.team and unit.unit_type in (0,1)]
+        allies = [unit for unit in all_entities if unit.team_id == bot.team and unit.unit_type in (0,1)
+                  and unit.health_points > 0 and math.dist(entity.pos,unit.pos) < 600]
+        if support is None and now >= bot.regroup_until and len(threats) >= 3 and len(threats) > 1.5*len(allies):
+            # Count only line-of-sight threats, not hidden opponents. Fall back
+            # toward reinforcement or a friendly pad, then reassess after 4s.
+            anchors = [unit for unit in allies if math.dist(entity.pos,unit.pos) > 200]
+            if not anchors:
+                anchors = [unit for unit in all_entities if unit.team_id == bot.team
+                           and unit.unit_type == REPAIR_PAD_UNIT_TYPE and unit.health_points > 0]
+            anchor = min(anchors,key=lambda unit: math.dist(entity.pos,unit.pos),default=None)
+            if anchor is not None:
+                destination = tuple(math.floor(value/200)*200+100 for value in anchor.pos[:2])
+                # At home, make room instead of sitting on the deployment pad.
+                if math.dist(entity.pos[:2],destination) < 150:
+                    away = (entity.pos[0]-target.pos[0],entity.pos[1]-target.pos[1])
+                    length = max(1.,math.hypot(*away))
+                    destination = tuple(entity.pos[i]+250*away[i]/length for i in (0,1))
+                bot.goal = (self.navigation.reachable_near(entity.pos,destination)
+                            if self.navigation is not None else destination)
+                bot.regroup_until = now+4
+                bot.order = 'regroup'
+        evading = support is None and now < bot.regroup_until
+        aiming = visible and not evading
+        bot.engaging = aiming
         dx,dy,dz = ((target.pos[index]-entity.pos[index] for index in range(3))
                     if visible else (0.,0.,0.))
         distance = math.sqrt(dx*dx+dy*dy+dz*dz)
         waypoint = bot.goal
-        if not visible and waypoint is not None and self.navigation is not None:
+        if not aiming and waypoint is not None and self.navigation is not None:
             waypoint = self.navigation.waypoint(entity.pos,[waypoint])
         # Reaching an intermediate cell is not arriving at the tactical goal.
         arrival = 15 if service_targets else 35
         wants_move = bot.goal is not None and math.dist(entity.pos[:2],bot.goal) > arrival
         routed = waypoint is not None and wants_move
-        heading = (dx,dy) if visible else ((waypoint[0]-entity.pos[0],waypoint[1]-entity.pos[1])
+        heading = (dx,dy) if aiming else ((waypoint[0]-entity.pos[0],waypoint[1]-entity.pos[1])
                                            if waypoint is not None else (math.cos(entity.rot[2]),math.sin(entity.rot[2])))
         speed = .85
-        if not visible and routed:
+        if not aiming and routed:
             length = math.hypot(*heading)
             speed = min(speed,max(.25,length/90))
             if length > 1:
@@ -459,10 +500,10 @@ class BotManager:
         turn = 2.0 * yaw_error - 1.5 * entity.spin[2]
         entity.actions[1] = -max(-1.0, min(1.0, turn))
         entity.actions[6] = (max(-0.5,min(0.5,-math.atan2(dz,math.hypot(dx,dy))/1.4137167))
-                             if visible else 0.0)
+                             if aiming else 0.0)
         stopping_distance = min(180.0, combat.autocannon_range * 0.5)
-        entity.actions[2] = speed if routed and not visible and abs(yaw_error) < 1.0 else 0.0
-        bot.wants_move = bool(wants_move and not visible)
+        entity.actions[2] = speed if routed and not aiming and abs(yaw_error) < 1.0 else 0.0
+        bot.wants_move = bool(wants_move and not aiming)
         # Keep 80 decision timers from collapsing onto the same physics frame.
         bot.next_decision_at = now + bot.rng.uniform(.18,.22)
         if now >= bot.progress_check_at:
@@ -482,7 +523,7 @@ class BotManager:
             if visible and abs(yaw_error) < math.radians(10):
                 entity.actions[REPAIR_ACTION] = 1.0
             return
-        if not visible or distance <= 1.0e-6 or distance > combat.autocannon_range:
+        if not aiming or now < bot.fire_ready_at or distance <= 1.0e-6 or distance > combat.autocannon_range:
             return
 
         forward = _forward(entity.rot)
@@ -502,10 +543,17 @@ class BotManager:
         if getattr(self.server, "map_change_transition", None) is not None:
             return
         self.prepare_navigation()
+        land = getattr(self.server,'land',None)
+        terrain = (land.identity,land.revision) if land is not None else None
+        waiting = [bot for bot in self._bots if bot.entity is None and now >= bot.construction_ready_at]
+        # A small map may have only one pad per team. Never let repeated deaths
+        # of earlier roster entries starve players still awaiting a first spawn.
+        waiting.sort(key=lambda bot: (bot.spawn_position is not None and bot.spawned_terrain == terrain,
+                                      bot.construction_ready_at,bot.player_id))
+        for bot in waiting:
+            self._spawn(bot,now)
         for bot in tuple(self._bots):
             if bot.entity is None:
-                if now >= bot.construction_ready_at:
-                    self._spawn(bot, now)
                 continue
 
             if not bot.entity.is_manned:

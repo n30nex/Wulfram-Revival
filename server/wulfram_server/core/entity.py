@@ -6,6 +6,7 @@ from enum import IntFlag
 # InstallTeamInfoAndCreateNeutralTeam at 0x00417C90 writes zero to the
 # client-created Neutral TeamInfo's teamId field.
 NEUTRAL_TEAM_ID = 0
+SPAWN_PROTECTION_SECONDS = 5.0
 RED_TEAM_ID = 1
 BLUE_TEAM_ID = 2
 TEAM_ID_BY_SIDE = {
@@ -94,6 +95,8 @@ class GameEntity:
     health_points: float = 100.0
     max_health: float = 100.0
     energy: float = 1.0
+    spawn_protection_remaining: float = 0.0
+    spawn_protection_notice_pending: bool = False
 
     # Cargo boxes (unit type 19) carry the compact item ID used by the stock
     # client. IDs 0..11 select deployable unit types 25..36; 13 is only the
@@ -195,7 +198,7 @@ class GameEntity:
 
     def apply_damage(self, amount: float) -> bool:
         """Apply damage to a live entity and report whether it became lethal."""
-        if amount <= 0.0 or self.health_points <= 0.0:
+        if amount <= 0.0 or self.health_points <= 0.0 or self.spawn_protection_remaining > 0.0:
             return False
         self.set_health_points(self.health_points - amount)
         return self.health_points <= 0.0

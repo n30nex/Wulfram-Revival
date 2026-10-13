@@ -498,6 +498,30 @@ bool FindModelModelContact(
         staticShape.vertices.empty() || staticShape.triangles.empty()) {
         return false;
     }
+    // Reject distant bodies before allocating/translating every mesh vertex.
+    // The absolute matrix maps an origin-centred local box to a conservative
+    // world box, including rotated/off-centre models and non-unit matrices.
+    // Keep the original exact bounds/contact path for every possible overlap.
+    const double leftExtent[3] = {
+        std::max(std::fabs(dynamicShape.boundsMinimum.x), std::fabs(dynamicShape.boundsMaximum.x)),
+        std::max(std::fabs(dynamicShape.boundsMinimum.y), std::fabs(dynamicShape.boundsMaximum.y)),
+        std::max(std::fabs(dynamicShape.boundsMinimum.z), std::fabs(dynamicShape.boundsMaximum.z))};
+    const double rightExtent[3] = {
+        std::max(std::fabs(staticShape.boundsMinimum.x), std::fabs(staticShape.boundsMaximum.x)),
+        std::max(std::fabs(staticShape.boundsMinimum.y), std::fabs(staticShape.boundsMaximum.y)),
+        std::max(std::fabs(staticShape.boundsMinimum.z), std::fabs(staticShape.boundsMaximum.z))};
+    const double leftPosition[3] = {dynamicBody.position.x, dynamicBody.position.y, dynamicBody.position.z};
+    const double rightPosition[3] = {staticBody.position.x, staticBody.position.y, staticBody.position.z};
+    for (int axis = 0; axis < 3; ++axis) {
+        double extent = 0.0;
+        for (int component = 0; component < 3; ++component) {
+            extent += std::fabs(dynamicBody.orientation.elements[axis*3+component])*leftExtent[component]
+                + std::fabs(staticBody.orientation.elements[axis*3+component])*rightExtent[component];
+        }
+        const double padding = 1.0 + 64.0*std::numeric_limits<float>::epsilon()*
+            (std::fabs(leftPosition[axis])+std::fabs(rightPosition[axis])+extent);
+        if (std::fabs(leftPosition[axis]-rightPosition[axis]) > extent+padding) return false;
+    }
     const std::vector<Vec3f> dynamicVertices = TransformVertices(dynamicBody, dynamicShape);
     const std::vector<Vec3f> staticVertices = TransformVertices(staticBody, staticShape);
     if (!BoundsOverlap(dynamicVertices, staticVertices)) {
@@ -2397,6 +2421,20 @@ bool World::CreateEntity(const EntityDefinition& definition) {
     entity.body.activeLinearDrag = active.linearDrag;
     entity.body.angularDrag = active.angularDrag;
     entity.collisionShape = definition.collisionShape;
+    // Public callers can construct/modify a mesh directly instead of using
+    // FromMesh. Rebuild these cached bounds once before broad-phase use.
+    if (!entity.collisionShape.vertices.empty()) {
+        auto& shape = entity.collisionShape;
+        shape.boundsMinimum = shape.boundsMaximum = shape.vertices.front();
+        for (const Vec3f& vertex : shape.vertices) {
+            shape.boundsMinimum.x = std::min(shape.boundsMinimum.x,vertex.x);
+            shape.boundsMinimum.y = std::min(shape.boundsMinimum.y,vertex.y);
+            shape.boundsMinimum.z = std::min(shape.boundsMinimum.z,vertex.z);
+            shape.boundsMaximum.x = std::max(shape.boundsMaximum.x,vertex.x);
+            shape.boundsMaximum.y = std::max(shape.boundsMaximum.y,vertex.y);
+            shape.boundsMaximum.z = std::max(shape.boundsMaximum.z,vertex.z);
+        }
+    }
     entity.jetShape = definition.jetShape;
     entity.fuel = definition.fuel;
     entity.jetStrength = definition.jetStrength;

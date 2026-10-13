@@ -297,7 +297,6 @@ def start(args, root, client):
         if not password or any(ch.isspace() or ch in '\"\x00' for ch in password):
             raise ValueError('Set WULFRAM_LAB_PASSWORD for the isolated test account.')
         extra = ['--lab']
-        if args.scene == 'map': extra.append('red')
     run = root/'runs'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     run.mkdir(parents=True)
     launcher = run/'wulfram-display.exe'
@@ -309,7 +308,7 @@ def start(args, root, client):
     match = re.search(r'DISPLAY_PATCH pid=(\d+)',result.stdout)
     if result.returncode or not match:
         raise RuntimeError(f'Launch failed; inspect {run / "launch.log"}.')
-    process = ClientProcess(int(match[1]),client)
+    process = ClientProcess(int(match[1]),client,write=args.scene=='map')
     try:
         record = {'pid':process.pid,'created':process.created,'client':str(client),'output':[width,height],
                   'logical':logical,'scene':args.scene,'server':args.server,
@@ -319,18 +318,42 @@ def start(args, root, client):
         mailbox = re.search(r'CLIENT_LAB_MAILBOX=(\d+)',result.stdout)
         record['mailbox'] = int(mailbox[1]) if mailbox else None
         save(run/'run.json',record)
-        deadline = time.monotonic()+25
-        while True:
-            state = process.inspect(logical)
-            if state['scene'] == args.scene or time.monotonic() >= deadline:
-                break
-            time.sleep(.1)
+        initial_scene = 'teams' if args.scene == 'map' else args.scene
+        state, stable = wait_for_state(process, logical,
+                                      lambda current: current['scene'] == initial_scene, timeout=25)
+        if args.scene == 'map' and stable:
+            # Exercise the normal team/map controls after they are ready.
+            # The legacy -side shortcut can race roster layout during login.
+            x,y = state['viewports']['root']['origin']
+            process.menu_command(record['mailbox'],x+150,y+100)
+            state, stable = wait_for_state(process, logical, lambda current: current['team'] == 1)
+            if stable:
+                process.menu_command(record['mailbox'],x+50,y+470)
+                state, stable = wait_for_state(process, logical, lambda current: current['scene'] == 'map')
         save(run/'initial-state.json',state)
-        if state['scene'] != args.scene:
+        if not stable or state['scene'] != args.scene:
             raise TimeoutError(f'The recorded child is still awaiting scene {args.scene}; inspect {run}.')
     finally:
         process.close()
     print(run)
+
+
+def wait_for_state(process, logical, expected, timeout=5, settle=.75):
+    """A one-frame transition followed by a crash/error is not a passing click."""
+    deadline, stable_since = time.monotonic()+timeout, None
+    while True:
+        state = process.inspect(logical)
+        now = time.monotonic()
+        if expected(state):
+            if stable_since is None:
+                stable_since = now
+            if now-stable_since >= settle:
+                return state, True
+        else:
+            stable_since = None
+        if now >= deadline:
+            return state, False
+        time.sleep(.05)
 
 
 def main():
@@ -348,6 +371,7 @@ def main():
         if name == 'capture':
             command.add_argument('--label',required=True)
             command.add_argument('--verify-cursor',action='store_true')
+            command.add_argument('--expect-scene',choices=('login',*NAV_SCENES.values(),'world'))
         if name == 'click':
             command.add_argument('--x',type=int,required=True); command.add_argument('--y',type=int,required=True)
             command.add_argument('--expect-scene',choices=(*NAV_SCENES.values(),'world'))
@@ -374,23 +398,28 @@ def main():
             if int(state['draw_callback'],16) not in NAV_CALLBACKS:
                 raise ValueError('Clicks are restricted to the non-authentication team/deployment menus.')
             sequence = process.menu_command(record.get('mailbox'),args.x,args.y)
-            deadline = time.monotonic()+5
             def expected(after):
                 return ((args.expect_scene is None or after['scene'] == args.expect_scene)
                         and (args.expect_team is None or after['team'] == args.expect_team))
-            while time.monotonic() < deadline:
-                after = process.inspect(record['logical'])
-                if expected(after): break
-                time.sleep(.1)
+            after, stable = wait_for_state(process, record['logical'], expected)
             cursor_matches = after['cursor_position']==[args.x,args.y]
-            passed = expected(after) and cursor_matches and not after['layout_problems']
+            # Gameplay captures/recenters the pointer after the pad is clicked.
+            # Menu-to-menu transitions must still retain the clicked position.
+            pointer_captured = after['scene'] == 'world'
+            passed = stable and (cursor_matches or pointer_captured) and not after['layout_problems']
             save(run/f'click-{sequence:03}.json',{'point':[args.x,args.y], 'expected_scene':args.expect_scene,
-                 'expected_team':args.expect_team,'passed':passed,'cursor_matches':cursor_matches,'before':state,'after':after})
+                 'expected_team':args.expect_team,'passed':passed,'cursor_matches':cursor_matches,
+                 'pointer_captured':pointer_captured,'before':state,'after':after})
             print(json.dumps({'sequence':sequence,'scene':after['scene'],'team':after['team'],'passed':passed}))
             if not passed: raise AssertionError('The clicked control did not produce the expected client state.')
             return
         if args.action == 'capture':
             if not re.fullmatch(r'[a-z0-9-]{1,60}',args.label): raise ValueError('Use a simple capture label.')
+            state, stable = wait_for_state(process, record['logical'],
+                lambda current: current['scene'] == (args.expect_scene or state['scene']))
+            if not stable:
+                save(run/(args.label+'-unstable.json'),state)
+                raise AssertionError('The client did not remain in the expected scene before capture.')
             before = max((p.stat().st_mtime_ns for p in client.glob('shot*.bmp')),default=0)
             process.menu_command(record.get('mailbox'),capture=True)
             # Retail F12 reads the previous presented frame. Capture a second
@@ -402,6 +431,10 @@ def main():
             if latest is None or latest.stat().st_mtime_ns <= before:
                 raise ValueError('The screenshot command did not produce a new image.')
             shutil.copy2(latest,run/(args.label+'.bmp'))
+            after = process.inspect(record['logical'])
+            if after['scene'] != state['scene']:
+                save(run/(args.label+'-unstable.json'),after)
+                raise AssertionError('The client changed scene while its screenshot was captured.')
             check_map_image(latest,state)
             if args.verify_cursor: check_cursor_image(latest,state)
             save(run/(args.label+'.json'),state)

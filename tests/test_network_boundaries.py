@@ -166,6 +166,26 @@ class NetworkBoundaryTests(unittest.TestCase):
             left.close()
             right.close()
 
+    def test_tank_retry_uses_udp_and_preserves_live_health_and_fuel(self):
+        session = self.session()
+        session.entity = self.server.entities.create_entity(0, 1, (100, 0, 15))
+        session.entity.set_health_points(47)
+        session.entity.energy = .38
+        context = app.UdpContext(Mock(), ("127.0.0.1", 40000), self.server, session)
+        session.udp_context = context
+        from wulfram_server.network.streams import PacketReader
+        for _ in range(2):
+            app.on_tank_resend_request(context, PacketReader(b"\x00\x07"))
+        packets = [call.args[0] for call in context.transport.send.call_args_list
+                   if call.args[0][:1] == b"\x18"]
+        self.assertEqual(len(packets), 2)  # a lost response can be requested again
+        reader = PacketReader(packets[-1][1:])
+        reader.read_int32()
+        self.assertEqual(reader.read_bits(1), 1)
+        self.assertEqual(reader.read_bits(5), 0)
+        self.assertAlmostEqual(1-(reader.read_bits(10)-1)/1022, .47, delta=.001)
+        self.assertAlmostEqual(1-(reader.read_bits(10)-1)/1022, .38, delta=.001)
+
     def test_rate_limit_memory_and_expiry_are_bounded(self):
         limit = RateLimit(2, 1, keys=2)
         self.assertTrue(limit.allow("one", now=0))
