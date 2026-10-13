@@ -3,6 +3,43 @@
 This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. Linux remains out of scope.
 
+## Deployed candidate, October 12, 2026
+
+The public server runs `0.4.0-alpha2.1`, source
+`0f6310b08c55342a0e1e3b337157c19d0af2b136`. The Windows package remains
+`0.4.0-alpha2`, source `906fba4896918328de55167abd2a66bcab7d05da`, from Actions
+run `38324818801`. Its ZIP SHA-256 is
+`4327276ed0d24a99d593f008dbf3888aaf7bced088b24171819c1d7987f76913`.
+The server's native binding is the Actions artifact from run `38326498545`;
+source, native code and content are covered by its startup integrity manifest.
+
+There are 59 passing Python tests and successful Windows/x64/ARM64 checks.
+Real network testing exposed two disconnect races: a cleared connection
+reference during broadcasting, and mutation of the entity dictionary during
+iteration. Both have regressions. Entity membership is now copied under a
+lock; newly created or changed entities keep their unsent dirty state.
+Four subsequent waves of 16 real clients (64 login/spawn/disconnect journeys)
+passed on the private server without a restart or missing owner vitals.
+Three further Internet login/spawn/disconnect checks passed on the deployed
+hotfix. The final Windows package joined and spawned on the public server;
+desktop/mobile browser checks and a full external ZIP checksum passed too.
+
+The final server's six-minute 64-bot/16-simulated-client rotation check passed
+all three maps, lost 39 of 9003 scheduled ticks (0.43%), delivered at most
+1199-byte updates, and ended with no stalled bots. All 64 bots spawned;
+59 simultaneous goals were observed. A prior ten-minute run is described below.
+
+The initial alpha2 deployment caught a container-inaccessible absolute website
+symlink and rolled back the game. The site link was repaired, deployment and
+rollback now use relative symlinks, and the corrected public routes passed.
+The shared web container stayed on the same image with zero restarts.
+Server-only rollback is retained at
+`/opt/canadaverse/wulfram/backups/20261012-entity-0f6310b/rollback.py`;
+the earlier game/page rollback is at
+`/opt/canadaverse/wulfram/backups/20261012-readiness-906fba4/rollback.py`.
+Run their `--check` option before use. A server rollback leaves the Windows
+package and player page unchanged.
+
 ## Verified boundaries
 
 - Windows launcher: original executable hash verified before starting; patches
@@ -33,6 +70,8 @@ parity or every Windows/GPU/display combination. Linux remains out of scope.
 
 - Physical 4K, Windows 11, non-NVIDIA GPUs and mixed-DPI/multiple monitors have
   not been tested. Layout requests are not evidence of physical hardware QA.
+- The launcher and original client are unsigned. First-run experience on a
+  clean Windows installation remains unverified.
 - Legacy squads, persistent account ranks and the entire original equipment
   catalogue are not implemented. The player page and package guide identify
   that scope; a clickable legacy page is not proof its service exists.
