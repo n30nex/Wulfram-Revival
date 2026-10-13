@@ -21,6 +21,8 @@ class TankPacket(Packet):
     weapon_ready_mask: int = 0
     pulse_charge: float = 1.0
     repair_charge: float = 1.0
+    health: float | None = None
+    energy: float | None = None
 
     def serialize(self) -> bytes:
         # 1. Resolve Defaults
@@ -39,8 +41,8 @@ class TankPacket(Packet):
 
         if stats.include_vitals:
             pkt.write_bits(self.weapon_table_id, 5)
-            pkt.write_bits(stats.health_mult_bits, 10)
-            pkt.write_bits(stats.energy_mult_bits, 10)
+            pkt.write_bits(stats.health_mult_bits if self.health is None else round(max(0, min(1, self.health))*1023), 10)
+            pkt.write_bits(stats.energy_mult_bits if self.energy is None else round(max(0, min(1, self.energy))*1023), 10)
             write_local_weapon_state(pkt, self.weapon_table_id, self.weapon_ready_mask,
                                      self.pulse_charge, self.repair_charge)
 

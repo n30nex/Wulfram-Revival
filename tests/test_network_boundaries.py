@@ -185,7 +185,7 @@ class NetworkBoundaryTests(unittest.TestCase):
         session.udp_context = app.UdpContext(Mock(), ("127.0.0.1", 40000), self.server, session)
         receiver = TcpTransport(right)
         try:
-            events = (b"\x18spawn", b"\x1ebirth", b"\x1fchat", b"\x1ddeath", b"\x15delete")
+            events = (b"\x25spawn-reply", b"\x1ebirth", b"\x1fchat", b"\x1ddeath", b"\x15delete")
             for payload in events:
                 session.udp_context.send(payload)
             self.assertEqual([receiver.recv_payload(deadline=time.monotonic()+1) for _ in events], list(events))
@@ -197,6 +197,27 @@ class NetworkBoundaryTests(unittest.TestCase):
             right.close()
             session.tcp_transport.writer.join(1)
         self.assertFalse(session.tcp_transport.writer.is_alive())
+
+    def test_tank_retry_uses_udp_and_preserves_live_health_and_fuel(self):
+        session = self.session()
+        session.entity = self.server.entities.create_entity(0, 1, (100, 0, 15))
+        session.entity.set_health_points(47)
+        session.entity.energy = .38
+        context = app.UdpContext(Mock(), ("127.0.0.1", 40000), self.server, session)
+        session.udp_context = context
+        from wulfram_server.network.streams import PacketReader
+        for _ in range(2):
+            app.on_tank_resend_request(context, PacketReader(b"\x00\x07"))
+        packets = [call.args[0] for call in context.transport.send.call_args_list
+                   if call.args[0][:1] == b"\x18"]
+        self.assertEqual(len(packets), 2)  # a lost response can be requested again
+        reader = PacketReader(packets[-1][1:])
+        reader.read_int32()
+        self.assertEqual(reader.read_bits(1), 1)
+        self.assertEqual(reader.read_bits(5), 0)
+        self.assertAlmostEqual(reader.read_bits(10)/1023, .47, delta=.001)
+        self.assertAlmostEqual(reader.read_bits(10)/1023, .38, delta=.001)
+        self.assertNotIn(0x18, app.RELIABLE_GAME_OPCODES)
 
     def test_slow_tcp_reader_has_a_bounded_queue_without_blocking_the_simulation(self):
         left, right = socket.socketpair()

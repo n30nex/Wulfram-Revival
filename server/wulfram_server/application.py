@@ -628,7 +628,7 @@ class TcpContext:
 # The retail client accepts these control/lifecycle records over TCP as well
 # as UDP. Keep them in the same bounded FIFO as world changes and bootstrap;
 # only replaceable movement and presentation updates may be lost.
-RELIABLE_GAME_OPCODES = frozenset((0x15, 0x18, 0x1A, 0x1B, 0x1C, 0x1D,
+RELIABLE_GAME_OPCODES = frozenset((0x15, 0x1A, 0x1B, 0x1C, 0x1D,
                                   0x1E, 0x1F, 0x25, 0x29, 0x38, 0x3F))
 
 
@@ -2300,17 +2300,7 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
 
         # 4. Send TankPacket with the NEW Dynamic ID
         # The client will receive this and now know "I am NetID X"
-        pkt = TankPacket(
-            net_id=new_entity.net_id,
-            sequence_id=get_ticks(),
-            tank_cfg=ctx.server.packet_cfg.tank,
-            team_id=ctx.session.team,
-            unit_type=unit_id,
-            weapon_table_id=new_entity.weapon_table_id,
-            pos=new_entity.pos,
-            rot=new_entity.rot
-        )
-        ctx.send(pkt)
+        send_current_tank(ctx)
         # ProcessReincarnatePacket clears the client's pending-request flag on
         # every response; code 11 is the recovered "Request Granted" result.
         ctx.send(ReincarnatePacket(code=11))
@@ -2381,7 +2371,25 @@ def on_tank_resend_request(ctx: UdpContext, reader: PacketReader):
     # sequence number after the opcode.
     sequence_num = reader.read_int16()
     ctx.send_ack(packet_id=0x19, seq_num=sequence_num)
+    if ctx.session and ctx.session.request_rate.allow("tank_resend"):
+        send_current_tank(ctx)
     ctx.server.hooks.tank_resend_requested(ctx, sequence_num)
+
+
+def send_current_tank(ctx: UdpContext) -> None:
+    """The retail client requests a lost TANK over its reliable UDP channel."""
+    entity = ctx.session.entity
+    if entity is None or not entity.is_manned or entity.health_points <= 0:
+        return
+    # TANK has a bit-packed tail. The retail TCP decoder does not finish this
+    # record cleanly, so preserve its UDP path and honor native resend requests.
+    ctx.send(TankPacket(
+        net_id=entity.net_id, sequence_id=get_ticks(), tank_cfg=ctx.server.packet_cfg.tank,
+        team_id=entity.team_id, unit_type=entity.unit_type, pos=entity.pos, rot=entity.rot,
+        weapon_table_id=entity.weapon_table_id, weapon_ready_mask=entity.weapon_ready_mask,
+        pulse_charge=entity.pulse_charge, repair_charge=entity.repair_charge,
+        health=entity.health, energy=entity.energy,
+    ))
 
 
 @dispatcher.datagram_route(0x20)
