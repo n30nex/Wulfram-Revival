@@ -476,16 +476,26 @@ static int fix_full_view_read(HANDLE process, int width, int height,
 }
 
 static int fix_mouse_screen_space(HANDLE process, int width, int height) {
-    /* Menu bounds must not clamp WM_MOUSEMOVE to 640x480. */
+    /* WM_MOUSEMOVE packs signed 16-bit client coordinates. Captured input can
+       leave the window; zero-extension used to send negative positions to
+       the opposite edge. Preserve the native cursor correction after clamp. */
+    const unsigned char x_unsigned[]={0x0f,0xb7,0xc8}, x_signed[]={0x0f,0xbf,0xc8};
+    const unsigned char y_unsigned[]={0x0f,0xb7,0xc2}, y_signed[]={0x0f,0xbf,0xc2};
+    if (!patch(process,0x004b89dc,x_unsigned,x_signed,3)
+        || !patch(process,0x004b89e8,y_unsigned,y_signed,3)) return 0;
+    /* Menu bounds use the full framebuffer, with a lower bound of zero. */
     const unsigned char x_compare[]={0x8b,0x55,0xf8,0x3b,0x11};
-    unsigned char code[32]={0x8b,0x55,0xf8,0x81,0xfa}; size_t n=5;
+    unsigned char code[32]={0x8b,0x55,0xf8,0x85,0xd2,0x79,0x09,0x31,0xd2,
+        0x89,0x55,0xf8,0xc6,0x45,0xf3,0x01,0x81,0xfa}; size_t n=18;
     put32(code,&n,(uint32_t)width);
     if (!hook(process,0x004b89f8,x_compare,5,code,n,0x004b89fd)) return 0;
     const unsigned char x_limit[]={0x8b,0x08,0x83,0xe9,0x01};
     n=0; code[n++]=0xb9; put32(code,&n,(uint32_t)(width-1));
     if (!hook(process,0x004b8a04,x_limit,5,code,n,0x004b8a09)) return 0;
     const unsigned char y_compare[]={0x8b,0x45,0xfc,0x3b,0x42,0x04};
-    memcpy(code,y_compare,3); n=3; code[n++]=0x3d; put32(code,&n,(uint32_t)height);
+    const unsigned char y_lower[]={0x8b,0x45,0xfc,0x85,0xc0,0x79,0x09,0x31,0xc0,
+        0x89,0x45,0xfc,0xc6,0x45,0xf3,0x01,0x3d};
+    memcpy(code,y_lower,sizeof(y_lower)); n=sizeof(y_lower); put32(code,&n,(uint32_t)height);
     if (!hook(process,0x004b8a16,y_compare,6,code,n,0x004b8a1c)) return 0;
     const unsigned char y_limit[]={0x8b,0x51,0x04,0x83,0xea,0x01};
     n=0; code[n++]=0xba; put32(code,&n,(uint32_t)(height-1));
