@@ -25,7 +25,7 @@ class SoakTests(unittest.TestCase):
         for action in (2,5): self.assertAlmostEqual(bot.entity.actions[action],1,delta=.03)
 
     def sample(self, seconds=0, **overrides):
-        return dict({'git_commit':'a'*40,'process_id':10,'updated_utc':datetime.now(timezone.utc).isoformat(),
+        return dict({'git_commit':'a'*40,'process_id':10,'updated_utc':(datetime.now(timezone.utc)+timedelta(seconds=seconds)).isoformat(),
                      'bots':64,'sessions':64,'live_bots':62,'spawned_bots':64,'route_fields':80,'map':'crossroads',
                      'changing_map':False,'physics_ticks':int(seconds*25),'dropped_ticks':0,
                      'rss_bytes':100*1024*1024,'elapsed_seconds':seconds},**overrides)
@@ -48,6 +48,15 @@ class SoakTests(unittest.TestCase):
         samples[1]['spawned_bots'] = 64
         samples[-1]['rss_bytes'] *= 3
         self.assertFalse(SOAK['assess'](samples,86400,32)['passed'])
+
+    def test_tick_rate_uses_the_published_counter_interval(self):
+        # The final 5-second publication can lag behind a 90-second observer.
+        samples = [self.sample(),self.sample(85)]
+        result = SOAK['assess'](samples,90,16)
+        self.assertTrue(result['checks']['simulation_rate'])
+        self.assertFalse(result['passed'])
+        samples[-1]['physics_ticks'] = 1900
+        self.assertFalse(SOAK['assess'](samples,90,16)['checks']['simulation_rate'])
 
     def test_private_export_is_bounded_and_omits_player_identity(self):
         server = make_server()

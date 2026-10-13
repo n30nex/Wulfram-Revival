@@ -82,7 +82,11 @@ package and player page unchanged.
 
 ## Stable-play qualification work, October 13, 2026
 
-The next candidate adds bounded password retries, UDP bootstrap retries and
+The stable-play candidate is `e86e67d2e5663f1bb74b0f33152cd8683be0a74e`,
+server version `0.4.0-alpha2.2`. Its ARM64 binding comes from Actions run
+`38349852699`, SHA-256
+`11b59a63903cf4755f03799c681b9c82ee1555f01a173a0c2a377ad7008e986c`.
+It adds bounded password retries, UDP bootstrap retries and
 native TANK retransmission. Gameplay retains the retail transport: an
 experimental TCP gameplay path failed a real-client spawn and was removed.
 Five seconds of spawn protection end on any offensive input; repeated pad
@@ -105,29 +109,57 @@ base-defense radar still guide strategic jobs; combat obeys normal turning,
 scatter, fuel and cooldowns. Tactical scenario and real-map acceptance remain
 open, including team coordination and crowd behavior through complete matches.
 
+Waiting first deployments now take priority over repeat bot respawns. Route
+goals leave a cell of clearance at map edges. World-update construction starts
+with small groups instead of repeatedly serializing and discarding oversized
+world packets. Native collision checks reject provably separated bodies before
+transforming complete meshes, retaining the original narrow collision path.
+All three native suites passed on ARM64 with the original collision assets;
+the exact Actions binding passed its Python binding suite too.
+
+The final server completed a real 16-player login/deployment/movement/disconnect
+wave with all 64 bot accounts present. Its 90-second sample recorded 33 dropped
+ticks; this burst alone does not meet the under-1% gate. Long-run qualification
+and complete tactical scenarios remain required. Load clients run on a separate
+computer and stagger authentication while keeping 16 players connected, honoring
+the existing per-address limit on unauthenticated connections.
+
+On Windows 10, the preserved package passed the lab bridge's seven navigation
+tabs, a fully rendered map/model preview, repair-pad click and sustained world
+capture at the 1920x1080 aspect ratio. This verifies logical rendering and
+in-engine clicks. Native desktop capture timed out, so physical mouse and DPI
+qualification are still open. One earlier map-screen access violation in
+`D3DIM700.DLL` at offset `0x6129` was recorded; subsequent monitored runs did not
+reproduce it. Keep this intermittent crash open in #9. Login uses a text caret;
+the lab's software-pointer pixel check is intended for deployment menus.
+
 `qualification.json` is a private, fixed-size server snapshot updated every five
 seconds. It records cumulative simulation counters across map changes, current
 memory, bot population, bounded route-cache size and order counts. It contains
 no callsigns, IP addresses or credentials and is not part of the public status
 export. `scripts/qualify-soak.py` consumes it for one exact **staging** revision,
 tests 16 simultaneous real login/spawn/disconnect journeys every five minutes,
-and writes a bounded JSONL trace plus an atomic summary. A restart, stale
+and writes a bounded JSONL trace plus an atomic summary. Runner/probe hashes bind
+the evidence to its test tools. Tick rate uses the server publication interval
+rather than including the observer's wait for its next sample. A restart, stale
 heartbeat or failed journey fails the run. A short smoke run can complete but
 can never pass the 24-hour gate. Check both `status == "completed"` and
 `passed == true`; recovery injection is a separate controlled exercise.
 
-Example on the Pi (use a fresh output file and the actual candidate SHA):
+Example from a separate load-driver computer (use its actual SSH identity,
+the Pi address, a fresh output file and the candidate SHA):
 
 ```sh
 python3 scripts/qualify-soak.py \
   --state-directory /var/lib/wulfram/staging/stable-play-test \
   --expected-revision FULL_CANDIDATE_SHA \
-  --host 192.168.0.24 --expected-ip 192.168.0.24 --port 2628 \
+  --ssh-target USER@PI_LAN_ADDRESS --ssh-identity /path/to/ssh-identity \
+  --host PI_LAN_ADDRESS --expected-ip PI_LAN_ADDRESS --port 2628 \
   --output /path/to/private-evidence/soak.json
 ```
 
-The server and observer need separate supervised processes; the observer needs
-read access to the private state directory. Do not run this load against the
+The server and observer need separate processes; the SSH account needs read
+access through `sudo -n` to the private state directory. Do not run this load against the
 public service. M1/M2 issues remain open until their complete acceptance evidence
 is recorded; these changes do not promote the project to stable.
 

@@ -3,6 +3,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
+import hashlib
 from pathlib import Path, PurePosixPath
 import re
 import shlex
@@ -30,6 +31,7 @@ def assess(samples, elapsed, journeys):
     first, last = samples[0], samples[-1]
     ticks = last['physics_ticks']-first['physics_ticks']
     dropped = last['dropped_ticks']-first['dropped_ticks']
+    measured = (datetime.fromisoformat(last['updated_utc'])-datetime.fromisoformat(first['updated_utc'])).total_seconds()
     maps = sorted({sample['map'] for sample in samples if not sample['changing_map']})
     peak_live = {name:max(s['live_bots'] for s in samples if s['map']==name) for name in maps}
     spawned = {name:max(s['spawned_bots'] for s in samples if s['map']==name) for name in maps}
@@ -41,7 +43,9 @@ def assess(samples, elapsed, journeys):
         'full_24_hours': elapsed >= 86400,
         'all_rotation_maps': set(maps) >= {'crossroads','mayhem','frontier'},
         'all_bots_spawn_on_each_map': bool(spawned) and all(count == 64 for count in spawned.values()),
-        'simulation_rate': ticks >= .95*elapsed*25,
+        # Status files are published every 5s. Their counter interval, not the
+        # observer's sleep interval, is the denominator for measured tick rate.
+        'simulation_rate': measured > 0 and ticks >= .95*measured*25,
         'dropped_ticks_below_one_percent': 0 <= dropped < max(1,(ticks+dropped)*.01),
         'memory_within_budget': bool(memory) and max(memory) < 384*1024*1024,
         'memory_growth_bounded': bool(warm and tail) and sum(tail)/len(tail) <= sum(warm)/len(warm)*1.25+32*1024*1024,
@@ -49,7 +53,7 @@ def assess(samples, elapsed, journeys):
     }
     return {'checks':checks,'passed':all(checks.values()),'physics_ticks':ticks,'dropped_ticks':dropped,
             'maps_seen':maps,'peak_live_by_map':peak_live,'spawned_by_map':spawned,'peak_rss_bytes':max(memory,default=None),
-            'successful_journeys':journeys,'elapsed_seconds':round(elapsed,2)}
+            'successful_journeys':journeys,'elapsed_seconds':round(elapsed,2),'measured_seconds':measured}
 
 
 def main():
@@ -91,7 +95,9 @@ def main():
         parser.error('refusing to overwrite an earlier qualification run')
     samples, journeys = [], 0
     started = time.monotonic()
-    report = {'status':'running','git_commit':args.expected_revision,'passed':False}
+    report = {'status':'running','git_commit':args.expected_revision,'passed':False,
+              'harness_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+              'probe_sha256':hashlib.sha256((ROOT/'scripts/check-online.py').read_bytes()).hexdigest()}
 
     def save():
         temporary = args.output.with_suffix('.tmp')
@@ -128,6 +134,8 @@ def main():
                 if now-started >= args.seconds:
                     break
                 if now >= next_churn and not sample['changing_map']:
+                    if hashlib.sha256((ROOT/'scripts/check-online.py').read_bytes()).hexdigest() != report['probe_sha256']:
+                        raise ValueError('probe changed during qualification')
                     with ThreadPoolExecutor(max_workers=16) as workers:
                         results = list(workers.map(probe,range(16)))
                     journeys += sum(bool(result['journey_passed']) for result in results)
