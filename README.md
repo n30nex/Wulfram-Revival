@@ -1,4 +1,48 @@
-# Wulfram 2 Physics Core
+# Wulfram Revival
+
+A Canadaverse community remaster of Wulfram II, preserving its hover handling,
+combat and recognizable cockpit while bringing public matches, bots and the
+Windows client to modern systems.
+
+**[Play the Windows alpha](https://canadaverse.org/wulfram/)** ·
+**[Read the roadmap](ROADMAP.md)** ·
+**[Track progress](https://github.com/n30nex/Wulfram-Revival/issues/23)** ·
+**[Milestones](https://github.com/n30nex/Wulfram-Revival/milestones)**
+
+The public Pi 5 server runs 64 bots with 16 additional human places. The first
+stable release will focus on dependable matches, coordinated bots, clear
+onboarding and reliable graphics. A replacement client follows in stages,
+retaining the classic sci-fi identity and improving the HUD, assets and lighting.
+Windows comes first; native Linux support is deferred.
+
+The current release is an **alpha**. Release gates include automated checks and
+approval from the maintainer plus returning and new players. We are working
+toward acceptance checks rather than promising release dates.
+
+## Development status
+
+The default branch currently contains the original physics/server foundation
+and this roadmap. Playable revival work is available in the
+[development pull requests](https://github.com/n30nex/Wulfram-Revival/pulls), with
+the current qualification report in
+[PR #5](https://github.com/n30nex/Wulfram-Revival/pull/5).
+[M0](https://github.com/n30nex/Wulfram-Revival/issues/6) tracks integrating that
+work into the default branch and making the build and contribution path clear.
+
+To help, choose an item from the [roadmap](ROADMAP.md), check its dependencies
+and completion checks, and discuss the scope in its issue. For a bug report,
+include the client version, display settings, map, reproduction steps and a
+screenshot or sanitized log where useful. Do not include passwords or private
+server configuration.
+
+## Technical foundation
+
+The project builds on
+[baffler's Wulfram 2 Physics Core](https://github.com/baffler/Wulfram2-Physics-Core)
+and the Wulfram revival work in
+[Wulf-Forge](https://github.com/baffler/Wulf-Forge).
+
+### Wulfram 2 Physics Core
 
 An independently written portable C++17 reconstruction of Wulfram II vehicle
 physics, together with a CPython binding and an authoritative Python server
