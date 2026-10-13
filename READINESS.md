@@ -4,9 +4,61 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Live alpha2.5 and network lifecycle checks, October 13, 2026
+
+The public Pi server runs **`0.4.0-alpha2.5`**, source
+`05a32d92b6d697717de753bf96b394abba7ad72c`, from
+[PR #31](https://github.com/n30nex/Wulfram-Revival/pull/31). Deployment completed
+at 10:18 EDT. Spawn/team requests now validate their exact retail mode and body
+length before acknowledgement, replay tracking or ownership changes. Previously
+a malformed spawn could consume its sequence, suppressing a corrected retry;
+invalid modes and trailing team-request data could also change ownership.
+The regression reproduces all four cases against the previous implementation.
+
+All **104 Python tests** and Windows/Linux x64/ARM64 build checks pass. The exact
+ARM64 artifact from [Actions 38411386247](https://github.com/n30nex/Wulfram-Revival/actions/runs/38411386247)
+passed the asset-backed binding suite on the Pi. Its SHA-256 remains
+`584420a49559e1e7365bf27759d5a504aca38c338cb3b0b19100b98b540e0cd0`; physics API
+14 and game content are unchanged. The sealed release verifies 142 files.
+
+The new loopback-only harness exercises real TCP/UDP clients against the native
+server on the development host. An eight-client development run completed Tank
+deployment, team changes, death/deletion notices and full-health/full-fuel Scout
+redeployment for every client. A clean-source `05a32d9` run completed all 16
+client journeys, reached **80 simultaneous sessions**, and returned to exactly
+64 bot sessions with zero retained UDP peers. Both private servers stopped at
+completion. These checks used Windows binding
+`e150eaca0e7eed2c4fc65d023c4c9f1a497973c5a0b32e1bd984388092f8d8cf`
+from Actions `38407295330`; this change does not modify native physics.
+
+The eight-client run lasted 28.144 seconds, with 662 physics ticks and 29 dropped
+ticks; it passes lifecycle checks but misses the timing target. The 16-client
+run lasted 22.812 seconds, with 563 ticks and zero drops. Neither establishes Pi
+capacity or long-term uptime. Earlier failed harness attempts are retained:
+one used the wrong metrics field, and pad retries waited for incoming traffic.
+The corrected probe keeps retry timers running during silence and gives initial
+deployment 20 seconds before starting the requested world sample.
+
+After deployment, separate external Internet probes starting on each team
+completed login, a Tank spawn, team switching, old-vehicle deletion, a fresh
+Scout spawn at 100% health/fuel, movement inputs and clean disconnect. Each
+switch respected the five-second construction delay, completing deployment in
+5.342/5.391 seconds. Runtime telemetry confirmed all 64 bots had deployed and
+the new process remained ready without automatic restarts. The player page and
+fresh public status passed; Windows client version/hash/size remain alpha2 and
+the values recorded below.
+
+The guarded rollback to alpha2.4 is
+`/opt/canadaverse/wulfram/backups/20261013-alpha25-05a32d9/rollback.py`;
+its sealed target passed `--check` before and after deployment. No human players
+were connected at the restart. No soak or desktop interaction was used. Full
+map/death/reconnect fault scenarios, physical client/input coverage, tactical
+acceptance and human approval remain open. See [contributor commands](CONTRIBUTING.md)
+to reproduce the bounded checks.
+
 ## Live deployment, October 13, 2026, 13:33 UTC
 
-The public Pi server runs **`0.4.0-alpha2.4`**, source
+Before the alpha2.5 update, the public Pi server ran **`0.4.0-alpha2.4`**, source
 `2caef4bf497c677cf21ce40622393db9447b5ca0`. This deploys
 [PR #27](https://github.com/n30nex/Wulfram-Revival/pull/27),
 [PR #28](https://github.com/n30nex/Wulfram-Revival/pull/28) and
