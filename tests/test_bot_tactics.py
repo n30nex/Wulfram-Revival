@@ -163,5 +163,20 @@ class TacticsTests(unittest.TestCase):
         self.assertGreater(bot.recovery_until,104)
         self.assertLess(bot.entity.actions[2],0.)
 
+    def test_repeated_stall_tries_the_opposite_escape_direction(self):
+        server,_ = self.arena(1)
+        bot = server.bots.bots[0]
+        bot.next_plan_at = 200
+        bot.goal = (4500.,2500.)
+        bot.progress_position = bot.entity.pos
+        bot.progress_check_at = 100
+        server.bots._decide(bot,100)
+        first = bot.entity.actions[3]
+        self.assertLess(bot.entity.actions[2],0)
+        server.bots._decide(bot,103)
+        self.assertEqual(bot.entity.actions[3],-first)
+        self.assertLess(bot.entity.actions[2],0)
+        self.assertGreater(bot.next_jump_at,103)
+
 
 if __name__ == '__main__': unittest.main()

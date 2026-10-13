@@ -132,6 +132,22 @@ class BotTests(unittest.TestCase):
         far.set_health_points(0)
         self.assertIsNone(choose())
 
+    def test_low_vehicle_keeps_full_horizontal_spawn_clearance(self):
+        server = make_server()
+        pad = server.entities.get_entity(1)
+        vehicle = server.entities.create_entity(1,1,(18.,0.,4.))
+        # Farther than 20 from the elevated spawn centre, but still occupying
+        # the landing/departure space directly beside this pad.
+        self.assertGreater(math.dist(vehicle.pos,(0.,0.,15.)),20)
+        self.assertIsNone(server.bots._spawn_pad(1,require_free=True))
+        vehicle.pos=(21.,0.,4.)
+        self.assertIs(server.bots._spawn_pad(1,require_free=True),pad)
+        vehicle.pos=(0.,0.,100.)
+        self.assertIs(server.bots._spawn_pad(1,require_free=True),pad)
+        vehicle.pos=(0.,0.,4.)
+        vehicle.set_health_points(0)
+        self.assertIs(server.bots._spawn_pad(1,require_free=True),pad)
+
     def test_turns_toward_enemy_and_never_spawns_on_enemy_pad(self):
         server = make_server()
         bot = server.bots.add(team=1)

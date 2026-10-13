@@ -160,7 +160,8 @@ def main():
                             'order':owners[unit.net_id].order if unit.net_id in owners else None,
                             'wants_move':owners[unit.net_id].wants_move if unit.net_id in owners else None}
                             for unit in server.entities.get_all() if unit.unit_type in (0,1) and unit.health_points>0
-                            and math.dist(unit.pos,(pad.pos[0],pad.pos[1],pad.pos[2]+BOT_SPAWN_HEIGHT_OFFSET))<20]}
+                            and abs(unit.pos[2]-(pad.pos[2]+BOT_SPAWN_HEIGHT_OFFSET))<20
+                            and math.dist(unit.pos[:2],pad.pos[:2])<20]}
                         for pad in server.entities.get_all() if pad.unit_type==27]}
                 report['phases'] = {name:{'calls':len(values),'seconds':round(sum(values),3),
                                          'max_ms':round(max(values,default=0)*1000,3)}
