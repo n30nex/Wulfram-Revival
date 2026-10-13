@@ -60,7 +60,7 @@ static int load_retail_image(const wchar_t *path) {
         fputs("Fixture PE architecture/base/size check failed.\n",stderr); free(data); return 0;
     }
     image_size=nt->OptionalHeader.SizeOfImage;
-    image=(unsigned char*)VirtualAlloc((void*)0x00400000,image_size,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+    image=(unsigned char*)VirtualAlloc((void*)0x00400000,image_size,MEM_COMMIT,PAGE_READWRITE);
     if (image!=(unsigned char*)0x00400000) {
         fprintf(stderr,"Fixture image reservation failed: error=%lu size=%lu self=%p\n",
             GetLastError(),(unsigned long)image_size,GetModuleHandleW(NULL));
@@ -187,19 +187,59 @@ static int run_layout(const wchar_t *path, int width, int height) {
     expect(hit(widget,(float)(menu_x+19),(float)(menu_y+31))==0,"polygon click outside left",width,height);
     expect(hit(widget,(float)(menu_x+121),(float)(menu_y+31))==0,"polygon click outside right",width,height);
     VirtualFree(bridge,0,MEM_RELEASE);
-    VirtualFree(image,0,MEM_RELEASE); image=NULL;
+    VirtualFree(image,image_size,MEM_DECOMMIT); image=NULL;
     return 1;
+}
+
+static int reserved_child(const wchar_t *retail) {
+    wchar_t self[MAX_PATH],command[2*MAX_PATH+64];
+    DWORD length=GetModuleFileNameW(NULL,self,MAX_PATH);
+    if (!length || length>=MAX_PATH || wcslen(retail)>=MAX_PATH || !verify_exe(retail)) return 2;
+    swprintf(command,sizeof(command)/sizeof(*command),L"\"%ls\" --reserved \"%ls\"",self,retail);
+    STARTUPINFOW startup={0}; startup.cb=sizeof(startup);
+    startup.dwFlags=STARTF_USESTDHANDLES;
+    startup.hStdInput=GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput=GetStdHandle(STD_OUTPUT_HANDLE);
+    startup.hStdError=GetStdHandle(STD_ERROR_HANDLE);
+    PROCESS_INFORMATION child={0};
+    if (!CreateProcessW(self,command,NULL,NULL,TRUE,CREATE_SUSPENDED|CREATE_NO_WINDOW,NULL,NULL,&startup,&child)) return 1;
+    /* Reserve the original image's address range before the child's CRT,
+       heaps and temporary file buffers can occupy it. This is our own test
+       executable; no game entry point or external process is involved. */
+    void *reserved=VirtualAllocEx(child.hProcess,(void*)0x00400000,0x288000,MEM_RESERVE,PAGE_NOACCESS);
+    DWORD result=1;
+    if (reserved!=(void*)0x00400000 || ResumeThread(child.hThread)==(DWORD)-1) {
+        fputs("Could not reserve the isolated fixture address range.\n",stderr);
+        TerminateProcess(child.hProcess,1);
+    } else if (WaitForSingleObject(child.hProcess,30000)!=WAIT_OBJECT_0) {
+        fputs("Offline fixture exceeded its time bound.\n",stderr);
+        TerminateProcess(child.hProcess,1);
+    } else {
+        GetExitCodeProcess(child.hProcess,&result);
+    }
+    WaitForSingleObject(child.hProcess,5000);
+    CloseHandle(child.hThread); CloseHandle(child.hProcess);
+    return (int)result;
 }
 
 int wmain(int argc, wchar_t **argv) {
     if (argc==2 && !wcscmp(argv[1],L"--self-test")) return bridge_self_test();
-    if (argc!=2) { fputs("Usage: wulfram-layout-check.exe VERIFIED_RETAIL_EXE\n",stderr); return 2; }
+    if (argc==2) return reserved_child(argv[1]);
+    if (argc!=3 || wcscmp(argv[1],L"--reserved")) {
+        fputs("Usage: wulfram-layout-check.exe VERIFIED_RETAIL_EXE\n",stderr); return 2;
+    }
+    MEMORY_BASIC_INFORMATION region={0};
+    if (!VirtualQuery((void*)0x00400000,&region,sizeof(region)) || region.AllocationBase!=(void*)0x00400000
+            || region.State!=MEM_RESERVE || region.RegionSize<0x288000) {
+        fputs("Missing isolated fixture reservation.\n",stderr); return 2;
+    }
     const int sizes[][2]={{640,480},{720,540},{864,540},{960,540},{1280,540},{1296,540},{1920,540},{676,540}};
     for (size_t i=0;i<sizeof(sizes)/sizeof(*sizes);++i) {
-        if (!run_layout(argv[1],sizes[i][0],sizes[i][1])) {
+        if (!run_layout(argv[2],sizes[i][0],sizes[i][1])) {
             fputs("Retail signatures or layout fixture failed.\n",stderr); return 1;
         }
     }
+    VirtualFree((void*)0x00400000,0,MEM_RELEASE);
     printf("RETAIL_LAYOUT checks=%u failures=%u physical_display_qualified=false\n",checks,failures);
     return failures ? 1 : 0;
 }
