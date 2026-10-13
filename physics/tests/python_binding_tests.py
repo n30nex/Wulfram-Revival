@@ -28,7 +28,7 @@ def main() -> int:
     scout_shape_path = collision_root / "scout_2_s"
     pulse_shape_path = collision_root / "pulse_shell_s"
 
-    require(native.api_version() == native.API_VERSION == 13, "binding API version mismatch")
+    require(native.api_version() == native.API_VERSION == 14, "binding API version mismatch")
     world = native.create_world(
         count_x=4,
         count_y=4,
@@ -42,6 +42,18 @@ def main() -> int:
             "turn_adjust": 4.5,
         },
     )
+    require(native.vehicle_fuel_capacity(world,0) == 33000.0, "Tank capacity differs from its configuration")
+    require(native.vehicle_fuel_capacity(world,1) == 13000.0, "Scout capacity differs from its configuration")
+    configured = native.create_world(count_x=2,count_y=2,spacing_x=10.0,spacing_y=10.0,
+        heights_x_major=[0.0]*4,terrain_identity="capacity-test",configuration={"maximum_fuel":5000.0})
+    require(native.vehicle_fuel_capacity(configured,0) == 5000.0, "capacity ignored the world's configuration")
+    require(native.vehicle_fuel_capacity(configured,1) == 13000.0, "Tank tuning changed Scout capacity")
+    for kind in (-1,2,6):
+        try:
+            native.vehicle_fuel_capacity(world,kind)
+            raise RuntimeError("unsupported vehicle type accepted")
+        except ValueError:
+            pass
     native.create_tank(
         world=world,
         entity_id=7,

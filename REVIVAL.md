@@ -128,9 +128,10 @@ Choose `/s vehicle tank|scout|siege|auto` for the next deployment. `auto`
 restores the original map-screen Tank/Scout choice. Low-resource bots return
 to friendly service pads, and Scouts seek nearby damaged allies.
 
-Weapon fuel debit and pad refueling now use native authority. These changes
-require Python binding API **13**; rebuild the native module with the source
-before deploying this branch. Reusing the live API-12 module is rejected.
+Weapon fuel debit and pad refueling use native authority. Fuel percentages are
+relative to each vehicle's capacity, including docking and body recreation.
+These changes require Python binding API **14**; upgrade the server and native
+artifact together. Older bindings are rejected before physics starts.
 
 Generate the original Frontier map into a new, external map directory:
 

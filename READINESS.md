@@ -4,6 +4,32 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Scout fuel accounting, October 13, 2026
+
+[PR #29](https://github.com/n30nex/Wulfram-Revival/pull/29) corrects a shared
+fuel-conversion error. The native Scout holds 13,000 units, while the Tank holds
+33,000. Normalizing both against the Tank's capacity made a full Scout report
+39.39% fuel and remain in resupply mode after filling up. The server now reads
+capacities from the native world and uses the matching value for creation,
+snapshots, weapon costs, refueling and docked regeneration. No handling or
+capacity constants were changed.
+
+All 101 Python tests and Windows display/native-physics, Linux x64 and ARM64
+build checks pass for implementation `9964e59d7ceb5ad3433595847205edbe630ccf35`.
+The exact Windows artifact from Actions `38401373284`, SHA-256
+`1dd81667b27e17edd0d11243fd669a0edefb7967859c33203cb9852f9ceff430`, passes the
+asset-backed binding suite. A native before/after check changes the full Scout
+from 39.39% and still resupplying to 100% and resupply complete. Native docking
+checks preserve 16,500/6,500 units at half fuel and 33,000/13,000 at full fuel for
+Tank/Scout, with the full-fuel TANK wire value verified independently.
+
+The bounded simulation-clock deployment checks still pass with 64 bots and
+16 simulated recipients: all bots deploy at 54 simulated seconds on Crossroads
+and Mayhem, and 5.12 seconds on Frontier. These are behavior checks, not timing
+or uptime claims. Python binding API 14 rejects old binaries; the source and
+native artifact require a coordinated upgrade. The live release and player
+client were not changed. Actual client and deployment qualification remain open.
+
 ## Background bot qualification, October 13, 2026
 
 [PR #28](https://github.com/n30nex/Wulfram-Revival/pull/28) addresses three
