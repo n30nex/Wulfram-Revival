@@ -156,7 +156,7 @@ def main():
                     failures = [result for result in results if not result['journey_passed']]
                     if failures:
                         report['failed_journeys'] = [{key:result.get(key) for key in (
-                            'phase','error_type','spawn_received','spawn_health','movement_inputs_sent',
+                            'team','phase','error_type','spawn_received','spawn_health','movement_inputs_sent',
                             'updates_missing_vitals','clean_disconnect')} for result in failures]
                         report['successful_journeys'] = journeys
                         raise ValueError('real login/spawn/disconnect journey failed')

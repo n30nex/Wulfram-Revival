@@ -137,6 +137,7 @@ class ClientSession:
         # survives Tank death and reincarnation within this connection.
         self.physics_input_sequence: int = 0
         self.construction_ready_at: float = 0.0
+        self.spawn_request_until: float = 0.0
         # A lethal hit first leaves the zero-health vehicle visible for the
         # stock client's death fade. DELETE_OBJECT is sent only when this
         # deadline expires; construction uses the same recovered timeout.
@@ -2214,7 +2215,10 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
             selected_pad = repair_pad
             repair_pad = ctx.server.bots._spawn_pad(ctx.session.team, require_free=True, preferred_id=net_id)
             if repair_pad is None:
-                send_system_message(ctx, "All friendly repair pads are occupied. Try again in a moment.")
+                # The bot loop checks pads every frame; a human retry arrives
+                # much less often. Yield the next opening for a bounded window.
+                ctx.session.spawn_request_until = time.monotonic()+2.5
+                send_system_message(ctx, "Repair pads are busy. Try again; your deployment has priority.")
                 ctx.send(ReincarnatePacket(code=4))
                 return
             if repair_pad is not selected_pad:
@@ -2261,6 +2265,7 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
             # after their complete pose is ready.
             ctx.server.entities.register_entity(new_entity)
         ctx.session.construction_ready_at = 0.0
+        ctx.session.spawn_request_until = 0.0
 
         # 3. Notify the Client
         send_system_message(
@@ -2304,6 +2309,7 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
                 defer_player_removal=False,
             )
         ctx.session.team = team_id
+        ctx.session.spawn_request_until = 0.0
         from wulfram_server.matches import stats_packet
         broadcast(ctx.server, stats_packet(ctx.session))
 

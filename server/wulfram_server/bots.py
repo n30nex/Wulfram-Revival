@@ -220,6 +220,11 @@ class BotManager:
     def _spawn_locked(self, bot: BotSession, now: float) -> bool:
         if getattr(self.server, "map_change_transition", None) is not None:
             return False
+        if any(not getattr(session,'is_bot',False) and session.is_logged_in and session.team == bot.team
+               and getattr(session,'spawn_request_until',0) > now
+               and (session.entity is None or not session.entity.is_manned or session.entity.health_points <= 0)
+               for session in self.server.sessions):
+            return False
         # Try every friendly pad before queuing an overlapping respawn.
         pad = self._spawn_pad(bot.team, require_free=True, preferred_index=bot.tactical_slot)
         if pad is None:

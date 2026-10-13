@@ -80,6 +80,7 @@ def main(args):
         "udp_ping_echo", "clean_disconnect", "passed")}
     result["started_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     result["source_host"] = socket.gethostname()
+    result["team"] = args.team
     result["phase"] = "dns"
     result["bots_by_team"] = {"1": 0, "2": 0}
     tcp = udp = None
