@@ -4,6 +4,33 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Network qualification findings, October 13, 2026
+
+The private eight-bot network lab reproduced a deployment stall in the deployed
+`675bdda` server: dropping the first TANK message leaves the preserved client on
+the map. Native opcode `0x19` requests another TANK after entity creation fails;
+it does not detect loss of the entire first message. A bounded server retry in
+candidate `8bbebf2` recovered the dropped message twice on the Pi in 0.52 seconds
+or less, with exactly one deployment request. All 91 Python tests pass; scripted
+journeys completed the six fault profiles with eight bots. The preserved-client
+retest and full lifecycle/load matrix remain open. See [network qualification](NETWORK-QUALIFICATION.md)
+for the repeatable profiles, actual-client evidence and remaining checks.
+
+The 06:04 UTC soak observer was interrupted by an orderly Windows restart at
+06:31 UTC. Its last observation covered 24 minutes and 64 successful journeys.
+The unchanged Pi process continued, but later shared-host pressure pushed its
+cumulative dropped-tick rate above the target. The interrupted private instance
+was stopped after preserving its counters; the old receipt's `running` value is
+stale. Following the maintainer's October 13 direction, no further soak tests are
+planned or required. Qualification now uses short background checks on the
+development host and scoped service checks while leaving the live game available.
+Those checks do not establish multi-day uptime.
+
+Two client access violations at `wulfram2.exe+0xdc7e7` were localized to entity
+list cleanup, once after normal Quit and once after connection reset. They are
+separate from the earlier `D3DIM700.DLL` fault. Their underlying list invariant
+failure remains open; no speculative client binary patch has been applied.
+
 ## Public server update, October 13, 2026
 
 The public server now runs `0.4.0-alpha2.3`, source
@@ -30,9 +57,9 @@ It fails if the observer pauses long enough to leave a gap in continuous coverag
 
 Two earlier long-run attempts failed closed: an observer SSH timeout, then the
 Mayhem pad race. Neither is a completed 24-hour qualification. These fixes and
-79 Python regressions advance the roadmap. A fresh 24-hour qualification began
-on October 13 at 06:04 UTC against the deployed candidate; completion still needs
-evidence. Display, adverse-network, complete
+79 Python regressions advance the roadmap. The fresh 24-hour qualification that
+began on October 13 at 06:04 UTC was interrupted as described above and does not
+pass. Display, adverse-network, complete
 tactical and human-approval gates remain open.
 
 ## Earlier deployment evidence, October 12, 2026
@@ -118,7 +145,7 @@ server version `0.4.0-alpha2.2`. Its ARM64 binding comes from Actions run
 `38349852699`, SHA-256
 `11b59a63903cf4755f03799c681b9c82ee1555f01a173a0c2a377ad7008e986c`.
 It adds bounded password retries, UDP bootstrap retries and
-native TANK retransmission. Gameplay retains the retail transport: an
+native TANK responses to creation-failure requests. Gameplay retains the retail transport: an
 experimental TCP gameplay path failed a real-client spawn and was removed.
 Five seconds of spawn protection end on any offensive input; repeated pad
 requests neither heal nor re-shield a live vehicle. The client harness requires
@@ -174,10 +201,12 @@ and writes a bounded JSONL trace plus an atomic summary. Runner/probe hashes bin
 the evidence to its test tools. Tick rate uses the server publication interval
 rather than including the observer's wait for its next sample. A restart, stale
 heartbeat or failed journey fails the run. A short smoke run can complete but
-can never pass the 24-hour gate. Check both `status == "completed"` and
-`passed == true`; recovery injection is a separate controlled exercise.
+can never establish 24-hour operation. This is historical tooling, retained for
+reproducibility; soak runs are no longer part of the active roadmap. Recovery
+injection remains a separate controlled exercise.
 
-Example from a separate load-driver computer (use its actual SSH identity,
+Historical invocation from a separate load-driver computer (do not launch as
+part of the current roadmap; use its actual SSH identity,
 the Pi address, a fresh output file and the candidate SHA):
 
 ```sh

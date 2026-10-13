@@ -14,8 +14,8 @@ the older pull requests when their commits are integrated.
 
 Follow the [README](README.md) for the C++17/CPython build and the
 [revival guide](REVIVAL.md) for external content and client setup. CI uses
-Python 3.13 and builds the native binding on Linux x64 and ARM64. It also builds
-and checks the 32-bit Windows display helper. Run the asset-free server checks:
+Python 3.13 and builds the native binding on Windows x64, Linux x64 and ARM64.
+It also builds and checks the 32-bit Windows display helper. Run the asset-free server checks:
 
 ```text
 python -m unittest discover -s tests -v
@@ -24,6 +24,14 @@ python -m unittest discover -s tests -v
 Gameplay/physics checks requiring original assets need a separate, authorized
 content directory. Keep game assets, credentials, private configuration, client
 copies and runtime logs outside Git. Share only sanitized evidence.
+
+For background tests on Windows, download the exact candidate's
+`wulfram-physics-windows-x64-python313` Actions artifact, verify its run/revision,
+and add its extracted directory to `PYTHONPATH` for that shell. Use 64-bit
+Python 3.13. `scripts/benchmark-bots.py` runs real native physics and bot combat
+without opening a window or listening on a port. Keep checks short and targeted;
+no soak tests are part of the active roadmap. This tests simulation, not the
+preserved client's rendering or physical input.
 
 ## Review and release
 

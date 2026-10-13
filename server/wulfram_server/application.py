@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass
 import ipaddress
 import math
 from pathlib import Path
@@ -42,6 +43,8 @@ CARGO_DROP_OFFSET = 12.0
 # Retain enough accepted wire sequence IDs to reject ordinary UDP retries
 # without confusing a later 16-bit sequence wrap for a duplicate.
 RELIABLE_REPLAY_HISTORY = 256
+SPAWN_DELIVERY_RETRY_SECONDS = 0.5
+SPAWN_DELIVERY_TIMEOUT_SECONDS = 8.0
 
 from wulfram_server.network.transport.tcp_transport import TcpTransport
 from wulfram_server.network.transport.udp_transport import UdpTransport
@@ -92,6 +95,15 @@ from wulfram_server.directory_query import try_tcp_query, try_udp_query
 # CONTEXTS
 # -------------------------------------------------------------------------
 
+@dataclass
+class PendingSpawnDelivery:
+    entity: GameEntity
+    input_sequence: int
+    team: int
+    deadline: float
+    retry_at: float
+
+
 class ClientSession:
     """
     Encapsulates the state for a single connected player.
@@ -138,6 +150,7 @@ class ClientSession:
         self.physics_input_sequence: int = 0
         self.construction_ready_at: float = 0.0
         self.spawn_request_until: float = 0.0
+        self.spawn_delivery: PendingSpawnDelivery | None = None
         # A lethal hit first leaves the zero-health vehicle visible for the
         # stock client's death fade. DELETE_OBJECT is sent only when this
         # deadline expires; construction uses the same recovered timeout.
@@ -181,6 +194,7 @@ class ClientSession:
             return
         self._cleaned_up = True
         self.stop_ping_event.set()
+        self.spawn_delivery = None
         was_logged_in = self.is_logged_in
         self.is_logged_in = False
         self.is_ready_for_updates = False
@@ -215,6 +229,7 @@ class ClientSession:
     def disconnect(self):
         """Wake the owning TCP worker; it performs cleanup exactly once."""
         self.stop_ping_event.set()
+        self.spawn_delivery = None
         for event in (self.key_echoed_event, self.login_received, self.d_handshake_ack_event):
             event.set()
         try:
@@ -759,6 +774,7 @@ def switch_session_team(context: TcpContext | UdpContext, team_id: int) -> bool:
         return False
 
     previous_team = session.team
+    session.spawn_delivery = None
     session.team = team_id
     if entity is not None:
         entity.team_id = team_id
@@ -1196,6 +1212,7 @@ def _destroy_authoritative_entity(
         from wulfram_server.matches import record_destruction
         record_destruction(server, entity, killer_player_id)
     if owner_session is not None:
+        owner_session.spawn_delivery = None
         if getattr(owner_session, "carried_cargo_item_id", None) is not None:
             owner_session.carried_cargo_item_id = None
             owner_session.carried_cargo_team_id = 0
@@ -1645,6 +1662,7 @@ def global_game_loop(server: WulframServerContext):
         admin_commands.check_win_condition(server)
 
         _update_spawn_protection_notices(server)
+        _update_spawn_deliveries(server, now)
         _update_ground_docking(server)
 
         # Accepted jump traces are gameplay events rather than periodic state.
@@ -2275,7 +2293,7 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
 
         # 4. Send TankPacket with the NEW Dynamic ID
         # The client will receive this and now know "I am NetID X"
-        send_current_tank(ctx)
+        _send_spawn_tank(ctx)
         # ProcessReincarnatePacket clears the client's pending-request flag on
         # every response; code 11 is the recovered "Request Granted" result.
         ctx.send(ReincarnatePacket(code=11))
@@ -2310,6 +2328,7 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
             )
         ctx.session.team = team_id
         ctx.session.spawn_request_until = 0.0
+        ctx.session.spawn_delivery = None
         from wulfram_server.matches import stats_packet
         broadcast(ctx.server, stats_packet(ctx.session))
 
@@ -2342,9 +2361,10 @@ def on_drop_request(ctx: UdpContext, reader: PacketReader):
 
 @dispatcher.datagram_route(0x19)
 def on_tank_resend_request(ctx: UdpContext, reader: PacketReader):
-    """Observe canonical opcode 0x19 without treating it as spawn proof."""
+    """Retry when retail received TANK but failed to create its local object."""
     # Stream 1 is reliable-unordered: this empty request carries only its
-    # sequence number after the opcode.
+    # sequence number after the opcode. Losing the entire TANK does not trigger
+    # this request, and receiving it does not prove successful deployment.
     sequence_num = reader.read_int16()
     ctx.send_ack(packet_id=0x19, seq_num=sequence_num)
     if ctx.session and ctx.session.request_rate.allow("tank_resend"):
@@ -2352,10 +2372,11 @@ def on_tank_resend_request(ctx: UdpContext, reader: PacketReader):
     ctx.server.hooks.tank_resend_requested(ctx, sequence_num)
 
 
-def send_current_tank(ctx: UdpContext) -> None:
-    """The retail client requests a lost TANK over its reliable UDP channel."""
+def send_current_tank(ctx: UdpContext, *, expected_entity: GameEntity | None = None) -> None:
+    """Send fresh native TANK state without recreating or restoring a vehicle."""
     entity = ctx.session.entity
-    if entity is None or not entity.is_manned or entity.health_points <= 0:
+    if (entity is None or not entity.is_manned or entity.health_points <= 0
+            or (expected_entity is not None and entity is not expected_entity)):
         return
     # Preserve the retail TANK path and honor its native resend requests;
     # snapshots and lifecycle messages have separate delivery requirements.
@@ -2366,6 +2387,41 @@ def send_current_tank(ctx: UdpContext) -> None:
         pulse_charge=entity.pulse_charge, repair_charge=entity.repair_charge,
         health=entity.health, energy=entity.energy,
     ))
+
+
+def _send_spawn_tank(ctx: UdpContext) -> None:
+    """Arm bounded delivery before sending the first unacknowledged raw TANK."""
+    now = time.monotonic()
+    entity = ctx.session.entity
+    ctx.session.spawn_delivery = PendingSpawnDelivery(
+        entity=entity, input_sequence=ctx.session.physics_input_sequence,
+        team=ctx.session.team, deadline=now+SPAWN_DELIVERY_TIMEOUT_SECONDS,
+        retry_at=now+SPAWN_DELIVERY_RETRY_SECONDS,
+    )
+    send_current_tank(ctx, expected_entity=entity)
+
+
+def _update_spawn_deliveries(server: WulframServerContext, now: float) -> None:
+    """Repair whole-TANK loss without per-player workers or TCP gameplay."""
+    for session in tuple(server.sessions):
+        pending = getattr(session, "spawn_delivery", None)
+        if pending is None:
+            continue
+        entity = pending.entity
+        if (not session.is_logged_in or not session.is_ready_for_updates
+                or session.udp_context is None or session.stop_ping_event.is_set()
+                or getattr(server, "map_change_transition", None) is not None
+                or session.entity is not entity or not entity.is_manned
+                or entity.health_points <= 0 or session.team != pending.team
+                or entity.team_id != pending.team
+                or server.entities.get_entity(entity.net_id) is not entity
+                or now >= pending.deadline):
+            if session.spawn_delivery is pending:
+                session.spawn_delivery = None
+            continue
+        if now >= pending.retry_at:
+            pending.retry_at = now+SPAWN_DELIVERY_RETRY_SECONDS
+            send_current_tank(session.udp_context, expected_entity=entity)
 
 
 @dispatcher.datagram_route(0x20)
@@ -2504,6 +2560,8 @@ def parse_action_packet(ctx: UdpContext, reader: PacketReader, is_dump: bool):
     action_values: list[tuple[int, float]] = []
     client_time_or_sequence = 0
     packet_time_or_flags = 0
+    action_entity = ctx.session.entity if ctx.session else None
+    pending_spawn = getattr(ctx.session, "spawn_delivery", None)
 
     if is_dump:
         dump_time_or_sequence = reader.read_int32()
@@ -2543,6 +2601,7 @@ def parse_action_packet(ctx: UdpContext, reader: PacketReader, is_dump: bool):
     for action_id in action_ids:
         value = _read_action_value(reader, action_id)
         action_values.append((action_id, value))
+    reader.align_to_byte(require_zero_padding=True)
 
     # Do not partially change authoritative input state if a malformed packet
     # ends halfway through its action table.
@@ -2559,6 +2618,15 @@ def parse_action_packet(ctx: UdpContext, reader: PacketReader, is_dump: bool):
     if ctx.session:
         ctx.session.physics_input_sequence += 1
         entity = ctx.session.entity
+        # Retail starts owner controls only after a TANK creates its local
+        # player. A snapshot ACK or resend request cannot prove that transition.
+        # Preserve a newer spawn if it replaced this one while decoding input.
+        if (decoded_actions and pending_spawn is not None
+                and ctx.session.spawn_delivery is pending_spawn
+                and entity is action_entity is pending_spawn.entity
+                and entity.is_manned and entity.health_points > 0
+                and ctx.session.physics_input_sequence > pending_spawn.input_sequence):
+            ctx.session.spawn_delivery = None
         jump_pressed = any(
             action_id == 4
             and (old_value is None or old_value == 0.0)
