@@ -14,6 +14,16 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def read_remote_state(command):
+    for attempt in range(2):
+        try:
+            result = subprocess.run(command,capture_output=True,text=True,timeout=10,check=True)
+            return json.loads(result.stdout), attempt
+        except (subprocess.TimeoutExpired,subprocess.CalledProcessError) as error:
+            if attempt or (isinstance(error,subprocess.CalledProcessError) and error.returncode != 255):
+                raise
+
+
 def read_sample(sample, revision, pid=None):
     age = (datetime.now(timezone.utc)-datetime.fromisoformat(sample['updated_utc'])).total_seconds()
     if sample['git_commit'] != revision or (pid is not None and sample['process_id'] != pid):
@@ -75,14 +85,17 @@ def main():
                             or not PurePosixPath(args.state_directory).is_absolute()):
         parser.error('SSH requires an explicit user@host, existing identity file and absolute Pi state path')
 
+    observer_read_retries = 0
     def fetch(filename):
+        nonlocal observer_read_retries
         if not args.ssh_target:
             return json.loads((Path(args.state_directory)/filename).read_text())
         command = ['ssh','-i',str(args.ssh_identity),'-o','IdentitiesOnly=yes','-o','BatchMode=yes',
                    '-o','StrictHostKeyChecking=yes',args.ssh_target,
                    'sudo -n cat -- '+shlex.quote(str(PurePosixPath(args.state_directory)/filename))]
-        result = subprocess.run(command,capture_output=True,text=True,timeout=10,check=True)
-        return json.loads(result.stdout)
+        result, retries = read_remote_state(command)
+        observer_read_retries += retries
+        return result
 
     runtime = fetch('runtime.json')
     if (runtime['environment'] != 'staging' or runtime['status'] != 'ready'
@@ -100,6 +113,7 @@ def main():
               'probe_sha256':hashlib.sha256((ROOT/'scripts/check-online.py').read_bytes()).hexdigest()}
 
     def save():
+        report['observer_read_retries'] = observer_read_retries
         temporary = args.output.with_suffix('.tmp')
         temporary.write_text(json.dumps(report,indent=2)+'\n')
         temporary.replace(args.output)

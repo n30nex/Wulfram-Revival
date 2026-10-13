@@ -2,9 +2,11 @@ from datetime import datetime, timezone, timedelta
 import json
 from pathlib import Path
 import runpy
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from test_bots import make_server
 from wulfram_server.operations import write_qualification_status
@@ -14,6 +16,20 @@ PROBE = runpy.run_path(str(Path(__file__).resolve().parents[1]/'scripts/check-on
 
 
 class SoakTests(unittest.TestCase):
+    def test_observer_retries_one_transport_timeout_but_never_hides_failure(self):
+        run = SOAK['read_remote_state'].__globals__['subprocess']
+        timeout = subprocess.TimeoutExpired(['ssh'],10)
+        with patch.object(run,'run',side_effect=[timeout,SimpleNamespace(stdout='{"process_id":10}')]) as command:
+            document, retries = SOAK['read_remote_state'](['ssh'])
+            self.assertEqual((document['process_id'],retries),(10,1))
+            self.assertEqual(command.call_count,2)
+        with patch.object(run,'run',side_effect=timeout) as command:
+            with self.assertRaises(subprocess.TimeoutExpired): SOAK['read_remote_state'](['ssh'])
+            self.assertEqual(command.call_count,2)
+        with patch.object(run,'run',side_effect=subprocess.CalledProcessError(1,['ssh'])) as command:
+            with self.assertRaises(subprocess.CalledProcessError): SOAK['read_remote_state'](['ssh'])
+            self.assertEqual(command.call_count,1)
+
     def test_load_client_sends_real_throttle_and_lift_controls(self):
         from wulfram_server.application import parse_action_packet
         from wulfram_server.network.streams import PacketReader
