@@ -154,7 +154,16 @@ class BotHandshakeTests(unittest.TestCase):
             self.assertIsNotNone(vehicle)
             self.assertEqual(vehicle.pos, free_pad.pos)
             self.assertEqual(vehicle.health, 1.0)
-            dispatch_udp(b"\x25" + struct.pack(">HHBiiii", 2, 22, 0, 1, 0, 2000, 700))
+            vehicle.spawn_protection_remaining = 2
+            vehicle.set_health_points(47)
+            vehicle.energy = .38
+            another_pad = server.entities.create_entity(27, 1, (600.0, 0.0, 0.0))
+            dispatch_udp(b"\x25" + struct.pack(">HHBiiii", 2, 22, 0, another_pad.net_id, 0, 2000, 700))
+            self.assertIs(session.entity, vehicle)
+            self.assertEqual(vehicle.health_points, 47)
+            self.assertEqual(vehicle.energy, .38)
+            self.assertEqual(vehicle.spawn_protection_remaining, 2)
+            dispatch_udp(b"\x25" + struct.pack(">HHBiiii", 3, 22, 0, 1, 0, 2000, 700))
             self.assertIs(session.entity, vehicle)
         finally:
             session.key_echoed_event.set()

@@ -308,7 +308,7 @@ def start(args, root, client):
     match = re.search(r'DISPLAY_PATCH pid=(\d+)',result.stdout)
     if result.returncode or not match:
         raise RuntimeError(f'Launch failed; inspect {run / "launch.log"}.')
-    process = ClientProcess(int(match[1]),client)
+    process = ClientProcess(int(match[1]),client,write=args.scene=='map')
     try:
         record = {'pid':process.pid,'created':process.created,'client':str(client),'output':[width,height],
                   'logical':logical,'scene':args.scene,'server':args.server,

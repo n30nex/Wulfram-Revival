@@ -196,8 +196,6 @@ class ClientSession:
             self.carried_cargo_team_id = 0
             _send_carrying_info(self.server, self, has_cargo=False)
         self.server.hooks.cleanup_session(self)
-        if self.tcp_transport is not None:
-            self.tcp_transport.close()
         try:
             self.tcp_sock.close()
         except OSError:
@@ -558,7 +556,7 @@ class WulframServerContext:
             if try_tcp_query(client_sock, self.instance_id,
                              allow_reply=lambda: self.allow_directory_query(session.address[0])):
                 return
-            tcp_transport = TcpTransport(client_sock, on_error=session.disconnect)
+            tcp_transport = TcpTransport(client_sock)
             session.tcp_transport = tcp_transport
             ctx = TcpContext(tcp_transport, self, session)
             do_login_and_bootstrap(client_sock, ctx, dispatcher)
@@ -625,29 +623,6 @@ class TcpContext:
             self.session.disconnect()
             raise ConnectionError("TCP send failed") from e
 
-# The retail client accepts these control/lifecycle records over TCP as well
-# as UDP. Keep them in the same bounded FIFO as world changes and bootstrap;
-# only replaceable movement and presentation updates may be lost.
-RELIABLE_GAME_OPCODES = frozenset((0x15, 0x1A, 0x1B, 0x1C, 0x1D,
-                                  0x1E, 0x1F, 0x25, 0x29, 0x38, 0x3F))
-
-
-def send_reliable_game_packet(session, payload: bytes | Packet) -> None:
-    if isinstance(payload, Packet):
-        payload = payload.serialize()
-    transport = getattr(session, "tcp_transport", None)
-    if transport is not None:
-        if session.stop_ping_event.is_set():
-            return
-        try:
-            TcpContext(transport, session.server, session).send(payload)
-        except ConnectionError:
-            session.disconnect()
-    elif session.udp_context is not None:
-        # In-memory simulation/test peers do not own a real TCP transport.
-        session.udp_context.send(payload)
-
-
 class UdpContext:
     """Context for a UDP Endpoint (Sessionless or Session-bound)"""
     def __init__(self, transport: UdpTransport, addr: Tuple[str, int], server: WulframServerContext, session: Optional[ClientSession] = None):
@@ -669,10 +644,6 @@ class UdpContext:
         else:
             payload = payload
 
-        if (payload and payload[0] in RELIABLE_GAME_OPCODES
-                and getattr(self.session, "tcp_transport", None) is not None):
-            send_reliable_game_packet(self.session, payload)
-            return
 
         self.transport.send(payload, self.addr)
         self.server.trace.packet(
@@ -870,14 +841,14 @@ def send_existing_player_entity_definitions(ctx: TcpContext | UdpContext, reason
     payloads = ctx.server.entities.build_forced_update_packets(
         entities,
         sequence_num=get_ticks(),
-        is_view_update=True,
+        is_view_update=False,
         forced_mask=forced_mask,
         local_stats=local_stats,
         force_spawn=True,
         viewer_team=session.team,
     )
     for payload in payloads:
-        send_reliable_game_packet(session, b"\x0F" + payload)
+        target_ctx.send(b"\x0E" + payload)
     for other_session in ctx.server.sessions:
         if getattr(other_session, "carried_cargo_item_id", None) is None:
             continue
@@ -1466,9 +1437,8 @@ def _broadcast_dirty_state(
             my_stats = _local_stats(my_entity)
             others = [e for e in dirty_entities if e.net_id != my_entity.net_id]
             if send_update_arrays and dirty_entities:
-                definitions = [e for e in others if e.pending_mask & UpdateMask.DEFINITION]
                 payloads = server.entities.build_update_packets(
-                    [e for e in others if not e.pending_mask & UpdateMask.DEFINITION],
+                    others,
                     sequence_num=current_tick,
                     is_view_update=False,
                     local_stats=my_stats,
@@ -1490,17 +1460,6 @@ def _broadcast_dirty_state(
                                 "[snapshot] broadcast 0x0E hard-sync "
                                 f"to_player={session.player_id} entities={ids}"
                             )
-                # Use the proven TCP world-snapshot format for definitions;
-                # retain the retail 0x0E movement format on its UDP path.
-                if definitions:
-                    mask = (UpdateMask.DEFINITION | UpdateMask.POS | UpdateMask.VEL
-                            | UpdateMask.ROT | UpdateMask.SPIN | UpdateMask.HEALTH
-                            | UpdateMask.WEAPON | UpdateMask.OWNER)
-                    for payload in server.entities.build_forced_update_packets(
-                            definitions, sequence_num=current_tick, is_view_update=True,
-                            forced_mask=mask, local_stats=my_stats, force_spawn=True,
-                            viewer_team=session.team):
-                        send_reliable_game_packet(session, b'\x0F' + payload)
 
             if send_view_updates and my_entity in view_dirty_entities:
                 if server.hooks.suppress_owner_view_update(server, session, my_entity):
@@ -1526,10 +1485,7 @@ def _broadcast_dirty_state(
                         viewer_team=getattr(session, "team", None),
                     )
                     if payload:
-                        if docked_mask & UpdateMask.DEFINITION:
-                            send_reliable_game_packet(session, b'\x0F' + payload)
-                        else:
-                            session.udp_context.send(b'\x0F' + payload)
+                        session.udp_context.send(b'\x0F' + payload)
                     continue
                 if server.hooks.suppress_owner_state_echo(server, session, my_entity):
                     continue
@@ -1550,10 +1506,7 @@ def _broadcast_dirty_state(
                     acknowledged_input_tick=my_entity.last_processed_client_tick,
                 )
                 if payload:
-                    if view_mask & UpdateMask.DEFINITION:
-                        send_reliable_game_packet(session, b'\x0F' + payload)
-                    else:
-                        session.udp_context.send(b'\x0F' + payload)
+                    session.udp_context.send(b'\x0F' + payload)
 
     if send_update_arrays:
         server.entities.clear_update_dirty_flags(update_versions)
@@ -2230,6 +2183,14 @@ def on_reincarnate(ctx: UdpContext, reader: PacketReader):
             remaining = ctx.session.construction_ready_at - time.monotonic()
             send_system_message(ctx, f"Construction available in {remaining:.1f} seconds.")
             ctx.send(ReincarnatePacket(code=4))
+            return
+
+        current = ctx.session.entity
+        if current is not None and current.is_manned and current.health_points > 0:
+            # A retry or another pad click must not heal an active vehicle or
+            # renew its spawn shield. Re-send its actual state instead.
+            send_current_tank(ctx)
+            ctx.send(ReincarnatePacket(code=11))
             return
 
         net_id = team_id_or_repaid_pad
