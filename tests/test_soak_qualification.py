@@ -31,15 +31,12 @@ class SoakTests(unittest.TestCase):
                      'rss_bytes':100*1024*1024,'elapsed_seconds':seconds},**overrides)
 
     def test_restarts_and_stale_snapshots_fail_closed(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory)/'sample.json'
-            path.write_text(json.dumps(self.sample()))
-            self.assertEqual(SOAK['read_sample'](path,'a'*40,10)['bots'],64)
-            with self.assertRaises(ValueError): SOAK['read_sample'](path,'b'*40,10)
-            with self.assertRaises(ValueError): SOAK['read_sample'](path,'a'*40,11)
-            old = (datetime.now(timezone.utc)-timedelta(seconds=30)).isoformat()
-            path.write_text(json.dumps(self.sample(updated_utc=old)))
-            with self.assertRaises(ValueError): SOAK['read_sample'](path,'a'*40,10)
+        sample = self.sample()
+        self.assertEqual(SOAK['read_sample'](sample,'a'*40,10)['bots'],64)
+        with self.assertRaises(ValueError): SOAK['read_sample'](sample,'b'*40,10)
+        with self.assertRaises(ValueError): SOAK['read_sample'](sample,'a'*40,11)
+        old = (datetime.now(timezone.utc)-timedelta(seconds=30)).isoformat()
+        with self.assertRaises(ValueError): SOAK['read_sample'](self.sample(updated_utc=old),'a'*40,10)
 
     def test_short_runs_and_memory_growth_cannot_pass(self):
         samples = [self.sample(),self.sample(300,map='mayhem'),self.sample(600,map='frontier')]

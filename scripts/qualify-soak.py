@@ -3,8 +3,9 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -12,8 +13,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def read_sample(path, revision, pid=None):
-    sample = json.loads(path.read_text())
+def read_sample(sample, revision, pid=None):
     age = (datetime.now(timezone.utc)-datetime.fromisoformat(sample['updated_utc'])).total_seconds()
     if sample['git_commit'] != revision or (pid is not None and sample['process_id'] != pid):
         raise ValueError('candidate changed or server restarted')
@@ -54,7 +54,9 @@ def assess(samples, elapsed, journeys):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--state-directory',type=Path,required=True)
+    parser.add_argument('--state-directory',required=True)
+    parser.add_argument('--ssh-target',help='read Pi state through SSH while generating player traffic on this computer')
+    parser.add_argument('--ssh-identity',type=Path)
     parser.add_argument('--expected-revision',required=True)
     parser.add_argument('--host',required=True)
     parser.add_argument('--expected-ip',required=True)
@@ -64,7 +66,21 @@ def main():
     args = parser.parse_args()
     if not re.fullmatch('[a-f0-9]{40}',args.expected_revision):
         parser.error('expected revision must be a complete commit SHA')
-    runtime = json.loads((args.state_directory/'runtime.json').read_text())
+    if args.ssh_target and (not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*@[A-Za-z0-9][A-Za-z0-9.-]*',args.ssh_target)
+                            or args.ssh_identity is None or not args.ssh_identity.is_file()
+                            or not PurePosixPath(args.state_directory).is_absolute()):
+        parser.error('SSH requires an explicit user@host, existing identity file and absolute Pi state path')
+
+    def fetch(filename):
+        if not args.ssh_target:
+            return json.loads((Path(args.state_directory)/filename).read_text())
+        command = ['ssh','-i',str(args.ssh_identity),'-o','IdentitiesOnly=yes','-o','BatchMode=yes',
+                   '-o','StrictHostKeyChecking=yes',args.ssh_target,
+                   'sudo -n cat -- '+shlex.quote(str(PurePosixPath(args.state_directory)/filename))]
+        result = subprocess.run(command,capture_output=True,text=True,timeout=10,check=True)
+        return json.loads(result.stdout)
+
+    runtime = fetch('runtime.json')
     if (runtime['environment'] != 'staging' or runtime['status'] != 'ready'
             or runtime['git_commit'] != args.expected_revision
             or runtime['tcp_port'] != args.port or runtime['udp_port'] != args.port):
@@ -83,6 +99,9 @@ def main():
         temporary.replace(args.output)
 
     def probe(index):
+        # Keep 16 connected players without tripping the intentional four
+        # unauthenticated connections/IP limit. This is a capacity/soak test.
+        time.sleep(index*.4)
         command = [sys.executable,str(ROOT/'scripts/check-online.py'),'--host',args.host,
                    '--expected-ip',args.expected_ip,'--port',str(args.port),'--team',str(1+index%2),
                    '--bots','64','--seconds','35','--drive']
@@ -97,7 +116,7 @@ def main():
         with trace.open('x',encoding='utf-8') as stream:
             while True:
                 now = time.monotonic()
-                sample = read_sample(args.state_directory/'qualification.json',args.expected_revision,runtime['process_id'])
+                sample = read_sample(fetch('qualification.json'),args.expected_revision,runtime['process_id'])
                 sample['elapsed_seconds'] = round(now-started,3)
                 if samples and (sample['physics_ticks'] < samples[-1]['physics_ticks']
                                 or sample['dropped_ticks'] < samples[-1]['dropped_ticks']):

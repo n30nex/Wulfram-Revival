@@ -868,6 +868,42 @@ void TestCorrectionGateSeesStaticBody() {
         "rejected static-body correction did not restore the dynamic pose");
 }
 
+void TestConservativeStaticContactBounds() {
+    PhysicsConfig config = DefaultPhysicsConfig();
+    config.tank.gravityMagnitude = 0.0;
+    World plain(config), crowded(config);
+    // This deliberately leaves FromMesh's cached bounds stale. The model is
+    // offset from its body origin and rotated; both must retain real contacts.
+    CollisionShape shifted = BoxShape({2.0F,1.0F,1.0F});
+    for (Vec3f& vertex : shifted.vertices) vertex.x += 80.0F;
+    EntityDefinition obstacle = StaticDefinition(2, {}, shifted);
+    obstacle.initialState.eulerRadians.z = 1.5707963267948966F;
+    obstacle.initialState.orientation = Matrix3d::FromEulerAngles(obstacle.initialState.eulerRadians);
+    EntityDefinition moving = TankDefinition(1, {-5.0F,80.0F,0.0F},BoxShape());
+    moving.controllerType = ControllerType::None;
+    moving.initialState.linearVelocity = {20.0F,0.0F,0.0F};
+    for (World* world : {&plain,&crowded}) {
+        Require(world->CreateEntity(moving) && world->CreateEntity(obstacle), "could not create contact-bound fixtures");
+    }
+    for (EntityId id = 3; id < 40; ++id) {
+        Require(crowded.CreateEntity(StaticDefinition(id,{1000.0F+float(id)*50,2000.0F,0.0F},BoxShape())),
+                "could not create distant collider");
+    }
+    Require(plain.StepWorld(1,250) && crowded.StepWorld(1,250), "contact-bound step failed");
+    const BodyState& a = *plain.GetBodyState(1);
+    const BodyState& b = *crowded.GetBodyState(1);
+    Require(a.position.x < -1.0F, "rotated off-centre collider was missed");
+    Require(a.position.x == b.position.x && a.position.y == b.position.y && a.position.z == b.position.z
+            && a.linearVelocity.x == b.linearVelocity.x && a.linearVelocity.y == b.linearVelocity.y
+            && a.linearVelocity.z == b.linearVelocity.z,
+            "distant colliders changed the exact local collision response");
+    bool contactSeen = false;
+    for (const TraceEvent& event : crowded.DrainTraceEvents()) {
+        contactSeen |= event.type == TraceEventType::Contact && event.entity == 1 && event.otherEntity == 2;
+    }
+    Require(contactSeen,"conservative bounds suppressed a real static contact");
+}
+
 void TestStableEntityOrder() {
     World world(DefaultPhysicsConfig());
     Require(world.CreateEntity(TankDefinition(9, {})), "could not create entity 9");
@@ -907,6 +943,7 @@ int main() {
     TestStaticBodyDoesNotAdvance();
     TestSweptDynamicStaticContact();
     TestCorrectionGateSeesStaticBody();
+    TestConservativeStaticContactBounds();
     TestStableEntityOrder();
     return 0;
 }
