@@ -44,9 +44,9 @@ static int load_retail_image(const wchar_t *path) {
     /* Hold a read-only, non-write-shared handle while verifying and reading. */
     HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);
     LARGE_INTEGER length;
-    if (file==INVALID_HANDLE_VALUE) return 0;
+    if (file==INVALID_HANDLE_VALUE) { fprintf(stderr,"Fixture file open failed: %lu\n",GetLastError()); return 0; }
     if (!verify_exe(path) || !GetFileSizeEx(file,&length) || length.QuadPart>16*1024*1024) {
-        CloseHandle(file); return 0;
+        fputs("Fixture identity or file-size check failed.\n",stderr); CloseHandle(file); return 0;
     }
     unsigned char *data=(unsigned char*)malloc((size_t)length.QuadPart);
     DWORD read=0;
@@ -57,11 +57,15 @@ static int load_retail_image(const wchar_t *path) {
     IMAGE_NT_HEADERS32 *nt=(IMAGE_NT_HEADERS32*)(data+dos->e_lfanew);
     if (nt->Signature!=IMAGE_NT_SIGNATURE || nt->FileHeader.Machine!=IMAGE_FILE_MACHINE_I386
             || nt->OptionalHeader.ImageBase!=0x00400000 || nt->OptionalHeader.SizeOfImage>16*1024*1024) {
-        free(data); return 0;
+        fputs("Fixture PE architecture/base/size check failed.\n",stderr); free(data); return 0;
     }
     image_size=nt->OptionalHeader.SizeOfImage;
     image=(unsigned char*)VirtualAlloc((void*)0x00400000,image_size,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
-    if (image!=(unsigned char*)0x00400000) { free(data); return 0; }
+    if (image!=(unsigned char*)0x00400000) {
+        fprintf(stderr,"Fixture image reservation failed: error=%lu size=%lu self=%p\n",
+            GetLastError(),(unsigned long)image_size,GetModuleHandleW(NULL));
+        free(data); return 0;
+    }
     memcpy(image,data,nt->OptionalHeader.SizeOfHeaders);
     IMAGE_SECTION_HEADER *section=IMAGE_FIRST_SECTION(nt);
     for (unsigned int i=0;i<nt->FileHeader.NumberOfSections;++i) {
