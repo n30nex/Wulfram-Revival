@@ -128,6 +128,14 @@ none of these scripted results substitutes for that pending test.
 
 ## Remaining acceptance
 
+The alpha2.5 update adds real loopback lifecycle checks and external team-change
+journeys, with explicit Tank/Scout identities, death/deletion notices and Scout
+fuel validation. All eight team-switch clients and all 16 connection-capacity
+clients completed their respective background scenarios with the 64-bot roster.
+The eight-client timing result missed its target; full adverse-network lifecycle
+coverage remains open. See [current deployment evidence](READINESS.md#live-alpha25-and-network-lifecycle-checks-october-13-2026)
+and [reproduction commands](CONTRIBUTING.md).
+
 - Retest targeted loss, delay/jitter, random loss and reordering against the
   exact candidate, including failed/retried login, both teams and deployments.
 - Cover death/respawn, creation/deletion, chat, full map changes and reconnects;
