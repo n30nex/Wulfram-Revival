@@ -4,9 +4,64 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Live alpha2.6 and reliable map handovers, October 13, 2026
+
+The public Pi server runs **`0.4.0-alpha2.6`**, source
+`e6f8bf2b4e5d5d84b704a8f26221672c0b6ba305`, from
+[PR #32](https://github.com/n30nex/Wulfram-Revival/pull/32). Deployment completed
+at 11:06 EDT. A lost UDP world announcement previously left a player on the old
+map with updates disabled. Map announcements now use the existing per-client
+TCP control worker, with one coalescing event per connection. Slow TCP sends
+stay outside the simulation loop. An old snapshot finishes before the next
+world announcement; teardown and pending announcements block premature readiness.
+Unfinished logins announce the current world themselves. Disconnects cannot
+skip the next recipient of a lifecycle broadcast.
+
+All **111 Python tests** and Windows/Linux x64/ARM64 checks pass. Five regressions
+reproduce failures in the previous implementation; additional checks cover
+non-blocking scheduling and coalescing to the current map. The exact ARM64
+artifact from [Actions 38418117758](https://github.com/n30nex/Wulfram-Revival/actions/runs/38418117758)
+passed the asset-backed binding suite on the Pi. Its SHA-256 remains
+`584420a49559e1e7365bf27759d5a504aca38c338cb3b0b19100b98b540e0cd0`.
+Physics API 14, native behavior and content are unchanged; the sealed release
+verifies 142 files.
+
+The native loopback harness discards every UDP world announcement and requires
+the replacement map over TCP, a new snapshot, deployment, and a same-callsign
+reconnect with a new player identity. All cases retain the 64-bot roster:
+
+| Source and destination | Clients | Duration | Physics ticks / dropped | Result |
+| --- | ---: | ---: | ---: | --- |
+| Previous `6bf610b`, Crossroads to Mayhem | 2 | 41.773 s | 1039 / 0 | Both stalled after two dropped UDP announcements. |
+| Candidate `e6f8bf2`, Crossroads to Mayhem | 16 | 50.369 s | 1254 / 0 | All 16 handovers and reconnects passed; peak 80 sessions. |
+| Candidate `e6f8bf2`, Crossroads to Frontier | 2 | 32.472 s | 799 / 8 | Both handovers and reconnects passed. |
+
+Each candidate ended with exactly 64 bot sessions, zero UDP peers and zero
+registered vehicles belonging to test clients; its private server stopped.
+The baseline failure remains recorded. These are bounded Windows protocol
+checks using the unchanged native binding from Actions `38407295330` and the
+canonical content digest recorded below. They do not qualify Pi capacity,
+long-term uptime or the preserved client's map rendering/input.
+
+After deployment, four external Internet journeys passed: team changes and
+same-callsign reconnects starting on both teams. Tank/Scout deployment had full
+health and fuel, owner vitals were present, and all four disconnected cleanly.
+Runtime telemetry confirmed all 64 bots had deployed and the exact release
+remained ready without automatic restarts. The player page and fresh public
+status passed; the Windows alpha2 download identity is unchanged. No public map
+rotation was forced for these post-deployment checks.
+
+The guarded rollback to alpha2.5 is
+`/opt/canadaverse/wulfram/backups/20261013-alpha26-e6f8bf2/rollback.py`.
+Its sealed target passed `--check` before and after the update. No human players
+were connected at the restart, and private Pi test services remain stopped.
+No soak or desktop interaction was used. Complete loss/reordering/combat
+lifecycle scenarios, physical client coverage, tactical acceptance and human
+approval remain open.
+
 ## Live alpha2.5 and network lifecycle checks, October 13, 2026
 
-The public Pi server runs **`0.4.0-alpha2.5`**, source
+Before alpha2.6, the public Pi server ran **`0.4.0-alpha2.5`**, source
 `05a32d92b6d697717de753bf96b394abba7ad72c`, from
 [PR #31](https://github.com/n30nex/Wulfram-Revival/pull/31). Deployment completed
 at 10:18 EDT. Spawn/team requests now validate their exact retail mode and body
