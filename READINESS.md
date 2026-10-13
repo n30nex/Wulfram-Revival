@@ -4,6 +4,51 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Live deployment, October 13, 2026, 13:33 UTC
+
+The public Pi server runs **`0.4.0-alpha2.4`**, source
+`2caef4bf497c677cf21ce40622393db9447b5ca0`. This deploys
+[PR #27](https://github.com/n30nex/Wulfram-Revival/pull/27),
+[PR #28](https://github.com/n30nex/Wulfram-Revival/pull/28) and
+[PR #29](https://github.com/n30nex/Wulfram-Revival/pull/29): lost initial-deployment
+recovery, repair-pad clearance and stuck recovery, and correct Scout fuel
+accounting. The maintainer now requests deployment of completed, validated
+increments as they are ready.
+
+The ARM64 Python 3.13 binding is the exact artifact from
+[Actions run 38404395999](https://github.com/n30nex/Wulfram-Revival/actions/runs/38404395999),
+SHA-256 `584420a49559e1e7365bf27759d5a504aca38c338cb3b0b19100b98b540e0cd0`.
+All 101 Python tests and platform build checks pass. The asset-backed native
+binding suite also passed on the Pi. The sealed package verifies 141 files;
+content identity remains
+`edd715d34b3d536828e5b0351fe88a3802ea3f485baaafe92964e7a46a50ac6f`.
+The Python server and binding API 14 were upgraded together.
+
+Both teams passed separate Internet protocol journeys from an external host:
+login, team join, full-health spawn, movement input, owner vitals and clean
+disconnect. Each requested deployment once, receiving it after 0.025/0.041
+seconds, and sent 34/38 movement inputs during an eight-second world sample.
+The roster contained 32 bots per team with team capacity 40. Runtime telemetry
+confirmed that all 64 bots had deployed, the exact native library was loaded,
+and the service stayed ready without automatic restarts. These are bounded
+post-deployment checks; they do not close the remaining client or tactical gates.
+
+The player page returned HTTP 200 from the Windows development host; its status
+was fresh and reported 64 bots plus 16 human places. Downloading the entire
+122,223,197-byte public Windows ZIP reproduced its published SHA-256
+`4327276ed0d24a99d593f008dbf3888aaf7bced088b24171819c1d7987f76913`.
+The client remains `0.4.0-alpha2`. The automated website request from the external
+Linux probe host received HTTP 403 from Cloudflare, so that web check is recorded
+as failed; the external game protocol checks passed.
+
+Only the game service was restarted, after confirming no human players or
+established game TCP connections. Unit/configuration hashes and game content
+were preserved. The guarded server-only rollback to alpha2.3 is
+`/opt/canadaverse/wulfram/backups/20261013-alpha24-2caef4b/rollback.py`;
+its `--check` verified the sealed recovery release before and after deployment.
+Private test services remain stopped. No soak test or desktop interaction was
+used for this deployment.
+
 ## Scout fuel accounting, October 13, 2026
 
 [PR #29](https://github.com/n30nex/Wulfram-Revival/pull/29) corrects a shared
@@ -27,8 +72,8 @@ The bounded simulation-clock deployment checks still pass with 64 bots and
 16 simulated recipients: all bots deploy at 54 simulated seconds on Crossroads
 and Mayhem, and 5.12 seconds on Frontier. These are behavior checks, not timing
 or uptime claims. Python binding API 14 rejects old binaries; the source and
-native artifact require a coordinated upgrade. The live release and player
-client were not changed. Actual client and deployment qualification remain open.
+native artifact require a coordinated upgrade, completed in the live deployment
+above. Actual client and full tactical qualification remain open.
 
 ## Background bot qualification, October 13, 2026
 
@@ -69,8 +114,8 @@ Earlier real-time checks are retained: a 45-second Crossroads run had only 59
 bots deployed and missed its timing gate; a subsequent 75-second run deployed
 all 64 with 3 dropped ticks out of 1878 scheduled (0.16%). The earlier Mayhem
 runs exposed the guard/scout pad jams described above. Do not hide these failed
-attempts or infer a platform-wide pass from one bounded check. The live Pi
-server and player client are preserved while local background work continues.
+attempts or infer a platform-wide pass from one bounded check. These server
+changes are now live; the player client remains unchanged.
 
 ## Network qualification findings, October 13, 2026
 
@@ -91,17 +136,18 @@ cumulative dropped-tick rate above the target. The interrupted private instance
 was stopped after preserving its counters; the old receipt's `running` value is
 stale. Following the maintainer's October 13 direction, no further soak tests are
 planned or required. Qualification now uses short background checks on the
-development host and scoped service checks while leaving the live game available.
-Those checks do not establish multi-day uptime.
+development host and scoped service checks. Completed validated updates are
+deployed to the public alpha; a planned game-service restart can briefly
+disconnect players. Those checks do not establish multi-day uptime.
 
 Two client access violations at `wulfram2.exe+0xdc7e7` were localized to entity
 list cleanup, once after normal Quit and once after connection reset. They are
 separate from the earlier `D3DIM700.DLL` fault. Their underlying list invariant
 failure remains open; no speculative client binary patch has been applied.
 
-## Public server update, October 13, 2026
+## Earlier alpha2.3 deployment, October 13, 2026
 
-The public server now runs `0.4.0-alpha2.3`, source
+The preceding public server ran `0.4.0-alpha2.3`, source
 `675bdda2f763b330b28d5daed2c3c1eed87b57a6`, with the stable-play work in
 [PR #25](https://github.com/n30nex/Wulfram-Revival/pull/25) and deployment fix in
 [PR #26](https://github.com/n30nex/Wulfram-Revival/pull/26).
@@ -110,7 +156,7 @@ input, owner vitals and clean disconnect. The existing Windows download still
 returns the same published checksum and byte count. Server-only rollback is
 `/opt/canadaverse/wulfram/backups/20261013-clearance-675bdda/rollback.py`.
 
-The current build (Actions `38353241181`) fixes Mayhem pad starvation:
+That build (Actions `38353241181`) fixes Mayhem pad starvation:
 the per-frame bot loop previously took openings before human retries arrived.
 Valid blocked human requests now give humans priority for 2.5 seconds, releasing
 on expiry, disconnect, team change or successful deployment. Invalid pads cannot
@@ -202,9 +248,10 @@ package and player page unchanged.
 - Legacy squads, persistent account ranks and the entire original equipment
   catalogue are not implemented. The player page and package guide identify
   that scope; a clickable legacy page is not proof its service exists.
-- Long-running, multi-day real-player matches and adverse-network conditions
-  remain release qualification work. Original reliable-stream semantics and
-  legacy client stability need testing under packet loss and reordering.
+- Bounded multiplayer lifecycle and adverse-network scenarios remain release
+  qualification work. Original reliable-stream semantics and legacy client
+  stability need testing under packet loss and reordering. Soak tests are
+  excluded by the maintainer's current direction.
 
 ## Stable-play qualification work, October 13, 2026
 
@@ -245,8 +292,8 @@ the exact Actions binding passed its Python binding suite too.
 
 The final server completed a real 16-player login/deployment/movement/disconnect
 wave with all 64 bot accounts present. Its 90-second sample recorded 33 dropped
-ticks; this burst alone does not meet the under-1% gate. Long-run qualification
-and complete tactical scenarios remain required. Load clients run on a separate
+ticks; this burst alone does not meet the under-1% gate. Further scoped operating
+checks and complete tactical scenarios remain required. Load clients run on a separate
 computer and stagger authentication while keeping 16 players connected, honoring
 the existing per-address limit on unauthenticated connections.
 
