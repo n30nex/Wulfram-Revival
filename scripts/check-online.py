@@ -259,6 +259,10 @@ def main(args):
             except TimeoutError:
                 break
             counts[f'{transport}:{packet[0]:02x}'] += 1
+            if packet[:1] == b'\x25' and len(packet) == 2:
+                codes = result.setdefault('spawn_reply_codes',{})
+                code = str(packet[1])
+                codes[code] = codes.get(code,0)+1
             if getattr(args,'drive',False) and result.get('spawn_received') and time.monotonic()>=drive_at:
                 drive_at=time.monotonic()+.2
                 udp.send(drive_packet(int(time.monotonic()*1000)&0x7fffffff))
@@ -303,8 +307,15 @@ def main(args):
     finally:
         if tcp is not None:
             try:
-                tcp.shutdown(socket.SHUT_RDWR)
-                result["clean_disconnect"] = True
+                # Let the server observe EOF, and drain its final bytes before
+                # closing. SHUT_RDWR can turn delayed in-flight data into a RST.
+                tcp.shutdown(socket.SHUT_WR)
+                close_deadline = time.monotonic()+2
+                while time.monotonic() < close_deadline:
+                    tcp.settimeout(max(.01,close_deadline-time.monotonic()))
+                    if not tcp.recv(65536):
+                        result["clean_disconnect"] = True
+                        break
             except OSError:
                 pass
             tcp.close()

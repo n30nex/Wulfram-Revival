@@ -87,6 +87,43 @@ packets contain no entity ID, so delayed input from a previous life remains an
 explicit protocol ambiguity to exercise under reordering. Automated regression
 coverage does not replace the pending real-client retest of the exact candidate.
 
+## Pi protocol-probe results after the fix
+
+Private server source: `8bbebf2867a8745a0be43eaf3fc3a1c0b2f4cd34`, version
+`0.4.0-alpha2.4-test`, eight bots, Crossroads. Actions run `38364764482` built
+its ARM64 binding, SHA-256
+`11b59a63903cf4755f03799c681b9c82ee1555f01a173a0c2a377ad7008e986c`.
+The public server continues to use alpha2.3.
+
+The targeted first-TANK test passed twice with exactly one deployment request:
+the server sent a second TANK after the relay dropped the first, and the probe
+received it after 0.520 and 0.511 seconds. Movement followed at full health,
+with no missing owner vitals. Retries stopped after owner controls arrived.
+
+Scripted journeys also completed under clean, bootstrap-loss, latency/jitter,
+reorder/duplication and random-loss profiles. Each used an eight-second world
+sample, with actual queue/drop/order counters and a completed relay receipt.
+These are short protocol checks with eight bots. The preserved client's fixed
+spawn path, its delay/jitter startup failure and the full lifecycle/load matrix
+still require separate qualification.
+
+Retain the failed attempts: an earlier latency probe closed its receive side
+before delayed TCP bytes drained, producing a reset after successful gameplay.
+The probe now half-closes and waits up to two seconds for server EOF; the repeat
+completed cleanly. An earlier random-loss run with pad retries deliberately
+disabled received no TANK. A repeat using normal pad-retry behavior passed;
+that earlier rejection was not diagnosed and must not be erased or counted as
+success. Use `--spawn-once` to isolate targeted TANK loss, not as a general
+substitute for the client's request recovery.
+
+Final probe source SHA-256:
+`36c5c0ede79206c25325ba687b3efce0266326f9511cbf36b6256e7177d6ef0a`.
+Relay source SHA-256:
+`b39572f6187c8186785caccd0ebe1c149f92271ecc14ed0b6b8ca698d5896667`.
+All 91 Python tests and the Windows/x64/ARM64 build checks pass for the server
+implementation. Native desktop testing paused when Computer Use was stopped;
+none of these scripted results substitutes for that pending test.
+
 ## Remaining acceptance
 
 - Retest targeted loss, delay/jitter, random loss and reordering against the

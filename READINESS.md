@@ -9,8 +9,11 @@ out of scope for the first release; the Pi server runs on Linux.
 The private eight-bot network lab reproduced a deployment stall in the deployed
 `675bdda` server: dropping the first TANK message leaves the preserved client on
 the map. Native opcode `0x19` requests another TANK after entity creation fails;
-it does not detect loss of the entire first message. A bounded server retry is
-being qualified separately. See [network qualification](NETWORK-QUALIFICATION.md)
+it does not detect loss of the entire first message. A bounded server retry in
+candidate `8bbebf2` recovered the dropped message twice on the Pi in 0.52 seconds
+or less, with exactly one deployment request. All 91 Python tests pass; scripted
+journeys completed the six fault profiles with eight bots. The preserved-client
+retest and full lifecycle/load matrix remain open. See [network qualification](NETWORK-QUALIFICATION.md)
 for the repeatable profiles, actual-client evidence and remaining checks.
 
 The 06:04 UTC soak observer was interrupted by an orderly Windows restart at
