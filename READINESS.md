@@ -6,16 +6,16 @@ out of scope for the first release; the Pi server runs on Linux.
 
 ## Public server update, October 13, 2026
 
-The public server now runs `0.4.0-alpha2.2`, source
-`e86e67d2e5663f1bb74b0f33152cd8683be0a74e`, integrated by
-[PR #25](https://github.com/n30nex/Wulfram-Revival/pull/25).
+The public server now runs `0.4.0-alpha2.3`, source
+`675bdda2f763b330b28d5daed2c3c1eed87b57a6`, with the stable-play work in
+[PR #25](https://github.com/n30nex/Wulfram-Revival/pull/25) and deployment fix in
+[PR #26](https://github.com/n30nex/Wulfram-Revival/pull/26).
 An external Internet client verified login, full-health deployment, movement
 input, owner vitals and clean disconnect. The existing Windows download still
 returns the same published checksum and byte count. Server-only rollback is
-`/opt/canadaverse/wulfram/backups/20261013-stable-e86e67d/rollback.py`.
+`/opt/canadaverse/wulfram/backups/20261013-clearance-675bdda/rollback.py`.
 
-A follow-up candidate, `675bdda2f763b330b28d5daed2c3c1eed87b57a6`
-(`0.4.0-alpha2.3`, Actions `38353241181`), fixes Mayhem pad starvation:
+The current build (Actions `38353241181`) fixes Mayhem pad starvation:
 the per-frame bot loop previously took openings before human retries arrived.
 Valid blocked human requests now give humans priority for 2.5 seconds, releasing
 on expiry, disconnect, team change or successful deployment. Invalid pads cannot
@@ -30,7 +30,9 @@ It fails if the observer pauses long enough to leave a gap in continuous coverag
 
 Two earlier long-run attempts failed closed: an observer SSH timeout, then the
 Mayhem pad race. Neither is a completed 24-hour qualification. These fixes and
-79 Python regressions advance the roadmap; display, adverse-network, complete
+79 Python regressions advance the roadmap. A fresh 24-hour qualification began
+on October 13 at 06:04 UTC against the deployed candidate; completion still needs
+evidence. Display, adverse-network, complete
 tactical and human-approval gates remain open.
 
 ## Earlier deployment evidence, October 12, 2026
