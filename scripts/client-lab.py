@@ -403,9 +403,13 @@ def main():
                         and (args.expect_team is None or after['team'] == args.expect_team))
             after, stable = wait_for_state(process, record['logical'], expected)
             cursor_matches = after['cursor_position']==[args.x,args.y]
-            passed = stable and cursor_matches and not after['layout_problems']
+            # Gameplay captures/recenters the pointer after the pad is clicked.
+            # Menu-to-menu transitions must still retain the clicked position.
+            pointer_captured = after['scene'] == 'world'
+            passed = stable and (cursor_matches or pointer_captured) and not after['layout_problems']
             save(run/f'click-{sequence:03}.json',{'point':[args.x,args.y], 'expected_scene':args.expect_scene,
-                 'expected_team':args.expect_team,'passed':passed,'cursor_matches':cursor_matches,'before':state,'after':after})
+                 'expected_team':args.expect_team,'passed':passed,'cursor_matches':cursor_matches,
+                 'pointer_captured':pointer_captured,'before':state,'after':after})
             print(json.dumps({'sequence':sequence,'scene':after['scene'],'team':after['team'],'passed':passed}))
             if not passed: raise AssertionError('The clicked control did not produce the expected client state.')
             return

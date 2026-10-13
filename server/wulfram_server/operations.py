@@ -80,6 +80,36 @@ def write_public_match_status(server: Any) -> None:
     _atomic_json(server.cfg.runtime.state_directory / "public.json", public_snapshot(server))
 
 
+def write_qualification_status(server: Any) -> None:
+    """Overwrite one private, bounded sample; never export player identities."""
+    from collections import Counter
+    metrics = server.physics.metrics
+    sessions = tuple(server.sessions)
+    bots = server.bots.bots
+    live = [bot for bot in bots if bot.entity is not None and bot.entity.is_manned]
+    navigation = server.bots.navigation
+    rss = None
+    try:
+        for line in Path('/proc/self/status').read_text().splitlines():
+            if line.startswith('VmRSS:'):
+                rss = int(line.split()[1])*1024
+                break
+    except FileNotFoundError:
+        pass  # Linux provides current RSS; other hosts report it as unavailable.
+    _atomic_json(server.cfg.runtime.state_directory / 'qualification.json', {
+        'schema_version': 1, 'updated_utc': _utc_now(), 'process_id': os.getpid(),
+        'git_commit': server.release_identity.git_commit, 'map': server.current_map_name,
+        'changing_map': server.map_change_transition is not None,
+        'physics_ticks': metrics.ticks, 'dropped_ticks': metrics.dropped_catch_up_ticks,
+        'rss_bytes': rss, 'sessions': len(sessions),
+        'bots': sum(bool(getattr(session,'is_bot',False)) for session in sessions),
+        'live_bots': sum(bot.is_bot for bot in live),
+        'entities': len(server.entities.get_all()),
+        'route_fields': len(navigation.fields) if navigation else 0,
+        'bot_orders': dict(Counter(bot.order for bot in live if bot.is_bot)),
+    })
+
+
 def consume_shutdown_request(server: Any) -> bool:
     request = server.cfg.runtime.state_directory / SHUTDOWN_REQUEST_FILENAME
     try:

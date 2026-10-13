@@ -69,6 +69,8 @@ class BotTests(unittest.TestCase):
         # Spawn uses the real monotonic clock; force a decision deterministically.
         bot.next_decision_at = 0.0
         server.bots.step(101.0)
+        self.assertEqual(bot.entity.actions[8], 0.0)
+        server.bots.step(101.8)
         self.assertEqual(bot.entity.actions[8], 1.0)
         self.assertEqual(bot.entity.actions[12], 1.0)
         self.assertEqual(bot.entity.actions[2], 0.0)

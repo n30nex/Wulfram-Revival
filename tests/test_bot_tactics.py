@@ -60,7 +60,56 @@ class TacticsTests(unittest.TestCase):
         server.bots._decide(bot,100)
         self.assertEqual(bot.target_id,exposed.net_id)
         self.assertNotEqual(bot.target_id,blocked.net_id)
+        self.assertEqual(bot.entity.actions[8],0.)
+        server.bots._decide(bot,101)
         self.assertEqual(bot.entity.actions[8],1.)
+
+    def test_reacquiring_a_target_requires_another_reaction_delay(self):
+        server, _ = self.arena(1)
+        bot = server.bots.bots[0]
+        enemy = server.entities.create_entity(0,2,(600.,2500.,15.))
+        server.physics.trace_segment.return_value = {'hit':True,'entity_id':enemy.net_id}
+        server.bots._decide(bot,100)
+        self.assertEqual(bot.entity.actions[8],0.)
+        server.bots._decide(bot,101)
+        self.assertEqual(bot.entity.actions[8],1.)
+        server.physics.trace_segment.return_value = {'hit':False,'entity_id':0}
+        server.bots._decide(bot,102)
+        server.physics.trace_segment.return_value = {'hit':True,'entity_id':enemy.net_id}
+        server.bots._decide(bot,103)
+        self.assertEqual(bot.entity.actions[8],0.)
+        server.bots._decide(bot,104)
+        self.assertEqual(bot.entity.actions[8],1.)
+
+    def test_outnumbered_bot_regroups_then_resumes_its_job(self):
+        server, _ = self.arena(1)
+        bot = server.bots.bots[0]
+        bot.entity.pos = (1000.,2500.,15.)
+        bot.entity.rot = (0.,0.,math.pi)
+        enemies = [server.entities.create_entity(0,2,(1300.,2500.+i*20,15.)) for i in range(3)]
+        server.physics.trace_segment.side_effect = lambda origin,end,**kw: {
+            'hit':True,'entity_id':next(unit.net_id for unit in enemies if unit.pos==end)}
+        server.bots._decide(bot,100)
+        self.assertEqual(bot.order,'regroup')
+        self.assertLess(bot.goal[0],1000)
+        self.assertTrue(bot.wants_move)
+        self.assertGreater(bot.entity.actions[2],0)
+        self.assertEqual(bot.entity.actions[8],0.)
+        server.physics.trace_segment.side_effect = None
+        server.physics.trace_segment.return_value = {'hit':False,'entity_id':0}
+        server.bots._decide(bot,101)
+        self.assertEqual(bot.order,'regroup')
+        server.bots._decide(bot,105)
+        self.assertEqual(bot.order,'assault')
+
+    def test_hidden_opponents_do_not_trigger_a_retreat(self):
+        server, _ = self.arena(1)
+        bot = server.bots.bots[0]
+        enemies = [server.entities.create_entity(0,2,(700.,2500.+i*20,15.)) for i in range(3)]
+        server.physics.trace_segment.return_value = {'hit':True,'entity_id':enemies[0].net_id}
+        server.bots._decide(bot,100)
+        self.assertEqual(bot.order,'assault')
+        self.assertEqual(bot.regroup_until,0)
 
     def test_nearby_route_waypoint_does_not_count_as_objective_arrival(self):
         server, _ = self.arena(1)

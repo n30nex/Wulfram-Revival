@@ -80,6 +80,57 @@ package and player page unchanged.
   remain release qualification work. Original reliable-stream semantics and
   legacy client stability need testing under packet loss and reordering.
 
+## Stable-play qualification work, October 13, 2026
+
+The next candidate adds bounded password retries, UDP bootstrap retries and
+native TANK retransmission. Gameplay retains the retail transport: an
+experimental TCP gameplay path failed a real-client spawn and was removed.
+Five seconds of spawn protection end on any offensive input; repeated pad
+requests neither heal nor re-shield a live vehicle. The client harness requires
+a sustained scene and uses the normal team/map controls. Entering gameplay may
+capture/recenter the pointer, while menu click checks still require alignment.
+
+The preserved Windows package reached a sustained 1920x1080 world on the private
+`bff003e` server, with aligned cockpit/chat and visible shield start/end messages.
+The user confirmed closing that run normally. Its two-minute Crossroads test
+with 64 bots and 16 simulated recipients dropped 17 ticks out of 3008 scheduled
+(0.57%), ended with no persistent stalls and observed 57 distinct goals.
+This evidence does not qualify other displays or a 24-hour run.
+
+Bots now wait 350-650ms after acquiring/reacquiring a visible target before
+firing. Three visible opponents can prompt an isolated bot to fall back toward
+allies/a friendly pad and reassess after four seconds. The decision uses at most
+three combat line-of-sight checks within 450 units. Known map structures and
+base-defense radar still guide strategic jobs; combat obeys normal turning,
+scatter, fuel and cooldowns. Tactical scenario and real-map acceptance remain
+open, including team coordination and crowd behavior through complete matches.
+
+`qualification.json` is a private, fixed-size server snapshot updated every five
+seconds. It records cumulative simulation counters across map changes, current
+memory, bot population, bounded route-cache size and order counts. It contains
+no callsigns, IP addresses or credentials and is not part of the public status
+export. `scripts/qualify-soak.py` consumes it for one exact **staging** revision,
+tests 16 simultaneous real login/spawn/disconnect journeys every five minutes,
+and writes a bounded JSONL trace plus an atomic summary. A restart, stale
+heartbeat or failed journey fails the run. A short smoke run can complete but
+can never pass the 24-hour gate. Check both `status == "completed"` and
+`passed == true`; recovery injection is a separate controlled exercise.
+
+Example on the Pi (use a fresh output file and the actual candidate SHA):
+
+```sh
+python3 scripts/qualify-soak.py \
+  --state-directory /var/lib/wulfram/staging/stable-play-test \
+  --expected-revision FULL_CANDIDATE_SHA \
+  --host 192.168.0.24 --expected-ip 192.168.0.24 --port 2628 \
+  --output /path/to/private-evidence/soak.json
+```
+
+The server and observer need separate supervised processes; the observer needs
+read access to the private state directory. Do not run this load against the
+public service. M1/M2 issues remain open until their complete acceptance evidence
+is recorded; these changes do not promote the project to stable.
+
 ## Repeatable checks
 
 Run `python -m unittest discover -s tests -v`, the native binding tests with
