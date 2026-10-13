@@ -93,7 +93,9 @@ Private server source: `8bbebf2867a8745a0be43eaf3fc3a1c0b2f4cd34`, version
 `0.4.0-alpha2.4-test`, eight bots, Crossroads. Actions run `38364764482` built
 its ARM64 binding, SHA-256
 `11b59a63903cf4755f03799c681b9c82ee1555f01a173a0c2a377ad7008e986c`.
-The public server continues to use alpha2.3.
+The public server used alpha2.3 during these private tests. The fix is now live
+in alpha2.4, source `2caef4bf497c677cf21ce40622393db9447b5ca0`; see
+[deployment evidence](READINESS.md#live-deployment-october-13-2026-1333-utc).
 
 The targeted first-TANK test passed twice with exactly one deployment request:
 the server sent a second TANK after the relay dropped the first, and the probe

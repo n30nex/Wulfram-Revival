@@ -23,6 +23,8 @@ while improving assets, lighting and readability.
   first major bot upgrade.
 - Qualify the existing feature set for the first stable release. Deeper original
   systems and expansion features follow later.
+- Deploy completed, validated increments to the public alpha as they are ready,
+  with a verified recovery path and post-deployment Internet checks.
 - Advance through acceptance checks, with **no fixed release dates**. The
   maintainer and a small group of returning and new players must approve the
   experience alongside automated checks.
@@ -32,7 +34,7 @@ while improving assets, lighting and readability.
 The public release is a playable alpha. It already provides the Windows package,
 public server, 64-bot matches and development work on display compatibility,
 tactical roles and reliability. Stable qualification remains open, including
-display/input coverage, sustained operation and mixed-experience playtests.
+display/input coverage, bounded operating checks and mixed-experience playtests.
 
 The reviewed alpha implementation is integrated into the default branch through
 [PR #5](https://github.com/n30nex/Wulfram-Revival/pull/5). M0 establishes this
@@ -77,10 +79,11 @@ actual rendering and mouse alignment across supported resolutions, DPI settings
 and window transitions. Use short, targeted background checks on the development
 host for 64 bots, map changes and human connection churn, plus scoped service
 recovery checks. No soak tests are planned or required, following the maintainer's
-October 13 direction. Leave the live game available; do not rely on an unlocked
-desktop for background tests. Record each check's duration and limits without
-inferring long-term uptime. Package checks start from the public download on a
-clean, ordinary Windows account.
+October 13 direction. Use isolated background tests that do not depend on an
+unlocked desktop. Deploy completed validated changes to the live alpha as they
+are ready; a scoped game-service restart can briefly disconnect players. Record
+each check's duration and limits without inferring long-term uptime. Package
+checks start from the public download on a clean, ordinary Windows account.
 
 ### M2: Tactical bots and a welcoming first match
 
