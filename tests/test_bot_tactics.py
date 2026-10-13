@@ -50,6 +50,42 @@ class TacticsTests(unittest.TestCase):
         server.bots._plan(guard,103,[objective])
         self.assertEqual(guard.order,'guard')
 
+    def test_boundary_patrol_cannot_arrive_while_still_blocking_a_spawn_pad(self):
+        # Match Mayhem's cell size and near-boundary repair pads. A patrol
+        # clamped to the first safe column used to leave a guard on its pad.
+        for team,position,slot in ((1,(100.,3380.,4.),10),(2,(5474.,3315.,4.),6)):
+            for phase in range(2):
+                with self.subTest(team=team,phase=phase):
+                    server,_ = self.arena(0)
+                    pad = next(unit for unit in server.entities.get_all() if unit.team_id==team)
+                    pad.pos = position
+                    server.land = SimpleNamespace(loaded=True,identity='edge',revision=1,width=129,height=129,
+                        cell_size_x=43.75,cell_size_y=43.75,heights=[[0.]*129 for _ in range(129)])
+                    server.bots.prepare_navigation()
+                    guard = server.bots.add(team=team,loadout='scout')
+                    guard.role,guard.tactical_slot = 'guard',slot
+                    guard.entity.pos = position
+                    now = 18*phase
+                    server.bots._decide(guard,now)
+                    self.assertIsNotNone(guard.goal)
+                    self.assertGreaterEqual(math.dist(guard.goal,pad.pos[:2]),80)
+                    self.assertTrue(guard.wants_move)
+                    self.assertTrue(server.bots.navigation.safe[server.bots.navigation.cell(guard.goal)])
+                    # Even the nearest accepted arrival point leaves a clear pad.
+                    self.assertGreater(math.dist(guard.goal,pad.pos[:2])-35,20)
+
+    def test_guard_rejects_a_patrol_point_that_would_block_another_friendly_pad(self):
+        server,_ = self.arena(3)
+        guard = server.bots.bots[2]
+        home = next(unit for unit in server.entities.get_all() if unit.unit_type==27 and unit.team_id==1)
+        now = 0
+        server.bots._plan(guard,now,[])
+        old_goal = guard.goal
+        second = server.entities.create_entity(27,1,(*old_goal,0.))
+        server.bots._plan(guard,now,[])
+        for pad in (home,second):
+            self.assertGreaterEqual(math.dist(guard.goal,pad.pos[:2]),80)
+
     def test_bot_can_engage_visible_enemy_when_nearest_is_blocked(self):
         server, _ = self.arena(1)
         bot = server.bots.bots[0]

@@ -328,7 +328,17 @@ class BotManager:
             anchor = homes[(slot//4) % len(homes)]
             # Patrol outside the spawn pads, with two stops and staggered phases.
             angle = (slot//4)*math.pi/2 + (int(now/18 + slot) % 2)*.8
-            destination = (anchor.pos[0]+280*math.cos(angle),anchor.pos[1]+280*math.sin(angle))
+            destination = None
+            for offset in range(8):
+                direction = angle+offset*math.pi/4
+                candidate = (anchor.pos[0]+280*math.cos(direction),anchor.pos[1]+280*math.sin(direction))
+                if self.navigation is not None:
+                    candidate = self.navigation.reachable_near(entity.pos,candidate)
+                # Clamping an off-map patrol point can put it back on a pad.
+                # Allow for the 35-unit arrival radius as well as pad occupancy.
+                if candidate is not None and all(math.dist(candidate,pad.pos[:2]) >= 80 for pad in pads):
+                    destination = candidate
+                    break
             target = None
         else:
             target = (structures[(slot//2) % len(structures)] if structures else
@@ -365,7 +375,7 @@ class BotManager:
             # every moving target on every steering tick. Aim still uses live pose.
             destination = tuple(math.floor(value/200)*200+100 for value in destination)
         bot.goal = (self.navigation.reachable_near(entity.pos,destination)
-                    if self.navigation is not None else destination)
+                    if self.navigation is not None and destination is not None else destination)
         bot.next_plan_at = now+2+bot.rng.random()*.6
 
     def _decide(self, bot: BotSession, now: float) -> None:
