@@ -85,12 +85,11 @@ def main():
     def probe(index):
         command = [sys.executable,str(ROOT/'scripts/check-online.py'),'--host',args.host,
                    '--expected-ip',args.expected_ip,'--port',str(args.port),'--team',str(1+index%2),
-                   '--bots','64','--seconds','20']
+                   '--bots','64','--seconds','35','--drive']
         result = subprocess.run(command,capture_output=True,text=True,timeout=75)
         document = json.loads(result.stdout)
-        if result.returncode or not document.get('passed') or not document.get('clean_disconnect'):
-            raise ValueError('real login/spawn/disconnect journey failed at '+str(document.get('phase')))
-        return True
+        document['journey_passed'] = not result.returncode and document.get('passed') and document.get('clean_disconnect')
+        return document
 
     save()
     try:
@@ -111,7 +110,15 @@ def main():
                     break
                 if now >= next_churn and not sample['changing_map']:
                     with ThreadPoolExecutor(max_workers=16) as workers:
-                        journeys += sum(workers.map(probe,range(16)))
+                        results = list(workers.map(probe,range(16)))
+                    journeys += sum(bool(result['journey_passed']) for result in results)
+                    failures = [result for result in results if not result['journey_passed']]
+                    if failures:
+                        report['failed_journeys'] = [{key:result.get(key) for key in (
+                            'phase','error_type','spawn_received','spawn_health','movement_inputs_sent',
+                            'updates_missing_vitals','clean_disconnect')} for result in failures]
+                        report['successful_journeys'] = journeys
+                        raise ValueError('real login/spawn/disconnect journey failed')
                     next_churn = time.monotonic()+300
                 time.sleep(min(10,max(0,started+args.seconds-time.monotonic())))
         report['status'] = 'completed'

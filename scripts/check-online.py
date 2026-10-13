@@ -62,6 +62,13 @@ def read_string(data, offset):
     return data[offset + 2:end - 1].decode("ascii"), end
 
 
+def drive_packet(stamp):
+    # Stock Translation slots 10/11/15 are fixed 16-bit scalars. +1 uses
+    # floor((1000-1)*65534/2000)+1 == 32735; action IDs are unscaled 16-bit.
+    # Keep the probe independent of the server's writer/quantizer.
+    return b'\x0a\x02'+struct.pack('>iiHHHH',stamp,0,2,32735,5,32735)
+
+
 def main(args):
     global HOST, EXPECTED_IP, PORT
     HOST, EXPECTED_IP, PORT = args.host, args.expected_ip, args.port
@@ -239,6 +246,7 @@ def main(args):
         started_spawn = time.monotonic()
         deadline = started_spawn + args.seconds
         retry_at=started_spawn+1
+        drive_at=started_spawn
         sequence=2
         samples = []
         counts = collections.Counter()
@@ -249,6 +257,10 @@ def main(args):
             except TimeoutError:
                 break
             counts[f'{transport}:{packet[0]:02x}'] += 1
+            if getattr(args,'drive',False) and result.get('spawn_received') and time.monotonic()>=drive_at:
+                drive_at=time.monotonic()+.2
+                udp.send(drive_packet(int(time.monotonic()*1000)&0x7fffffff))
+                result['movement_inputs_sent']=result.get('movement_inputs_sent',0)+1
             if time.monotonic()>=retry_at:
                 retry_at=time.monotonic()+1
                 udp.send(b'\x0b'+struct.pack('>ii',stamp,0))
@@ -308,4 +320,5 @@ if __name__ == "__main__":
     parser.add_argument('--team-capacity',type=int,default=40)
     parser.add_argument('--team',type=int,choices=(1,2),default=1)
     parser.add_argument('--seconds',type=int,choices=range(5,121),default=8,metavar='5..120')
+    parser.add_argument('--drive',action='store_true',help='move off the repair pad during staging connection waves')
     raise SystemExit(main(parser.parse_args()))

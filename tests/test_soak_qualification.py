@@ -10,9 +10,20 @@ from test_bots import make_server
 from wulfram_server.operations import write_qualification_status
 
 SOAK = runpy.run_path(str(Path(__file__).resolve().parents[1]/'scripts/qualify-soak.py'))
+PROBE = runpy.run_path(str(Path(__file__).resolve().parents[1]/'scripts/check-online.py'))
 
 
 class SoakTests(unittest.TestCase):
+    def test_load_client_sends_real_throttle_and_lift_controls(self):
+        from wulfram_server.application import parse_action_packet
+        from wulfram_server.network.streams import PacketReader
+        server = make_server()
+        bot = server.bots.add(team=1)
+        ctx = SimpleNamespace(server=server,session=bot)
+        decoded = parse_action_packet(ctx,PacketReader(PROBE['drive_packet'](99)[1:]),is_dump=False)
+        self.assertEqual([action for action,_,_ in decoded],[2,5])
+        for action in (2,5): self.assertAlmostEqual(bot.entity.actions[action],1,delta=.03)
+
     def sample(self, seconds=0, **overrides):
         return dict({'git_commit':'a'*40,'process_id':10,'updated_utc':datetime.now(timezone.utc).isoformat(),
                      'bots':64,'sessions':64,'live_bots':62,'spawned_bots':64,'route_fields':80,'map':'crossroads',
