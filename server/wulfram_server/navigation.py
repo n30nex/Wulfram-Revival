@@ -18,7 +18,10 @@ class TerrainRoutes:
                 gx = max(abs(b-a),abs(d-c))/self.sx
                 gy = max(abs(c-a),abs(d-b))/self.sy
                 self.heights.append((a+b+c+d)/4)
-                self.safe.append(math.hypot(gx,gy) <= self.MAX_SLOPE)
+                # Leave a full cell of clearance at the map boundary. A centre
+                # on the outer row lets a turning/drifting vehicle leave land.
+                self.safe.append(0 < x < self.width-1 and 0 < y < self.height-1
+                                 and math.hypot(gx,gy) <= self.MAX_SLOPE)
         self.edges = [[] for _ in self.safe]
         for node, safe in enumerate(self.safe):
             if not safe: continue

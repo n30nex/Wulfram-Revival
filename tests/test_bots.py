@@ -43,6 +43,17 @@ def make_server():
 
 
 class BotTests(unittest.TestCase):
+    def test_waiting_first_deployment_precedes_repeated_respawns(self):
+        server = make_server()
+        veteran = server.bots.add(team=1)
+        waiting = server.bots.add(team=1)
+        self.assertIsNone(waiting.entity)
+        server.entities.remove_entity(veteran.entity.net_id)
+        veteran.entity = None
+        server.bots.step(100)
+        self.assertIsNotNone(waiting.entity)
+        self.assertIsNone(veteran.entity)
+
     def test_retail_team_capacity_leaves_human_slots_with_64_bots(self):
         from wulfram_server.application import WulframServerContext
         from wulfram_server.network.packets.behavior import BehaviorPacket

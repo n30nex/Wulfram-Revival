@@ -88,6 +88,8 @@ def write_qualification_status(server: Any) -> None:
     bots = server.bots.bots
     live = [bot for bot in bots if bot.entity is not None and bot.entity.is_manned]
     navigation = server.bots.navigation
+    land = getattr(server,'land',None)
+    terrain = (land.identity,land.revision) if land is not None else None
     rss = None
     try:
         for line in Path('/proc/self/status').read_text().splitlines():
@@ -104,6 +106,7 @@ def write_qualification_status(server: Any) -> None:
         'rss_bytes': rss, 'sessions': len(sessions),
         'bots': sum(bool(getattr(session,'is_bot',False)) for session in sessions),
         'live_bots': sum(bot.is_bot for bot in live),
+        'spawned_bots': sum(bot.is_bot and bot.spawn_position is not None and bot.spawned_terrain == terrain for bot in bots),
         'entities': len(server.entities.get_all()),
         'route_fields': len(navigation.fields) if navigation else 0,
         'bot_orders': dict(Counter(bot.order for bot in live if bot.is_bot)),

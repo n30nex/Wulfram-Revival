@@ -32,6 +32,7 @@ def assess(samples, elapsed, journeys):
     dropped = last['dropped_ticks']-first['dropped_ticks']
     maps = sorted({sample['map'] for sample in samples if not sample['changing_map']})
     peak_live = {name:max(s['live_bots'] for s in samples if s['map']==name) for name in maps}
+    spawned = {name:max(s['spawned_bots'] for s in samples if s['map']==name) for name in maps}
     memory = [sample['rss_bytes'] for sample in samples if sample['rss_bytes'] is not None]
     # Compare after the first five minutes to allow initial spawns/cache warming.
     warm = [s['rss_bytes'] for s in samples if 300 <= s['elapsed_seconds'] <= 600 and s['rss_bytes'] is not None]
@@ -39,7 +40,7 @@ def assess(samples, elapsed, journeys):
     checks = {
         'full_24_hours': elapsed >= 86400,
         'all_rotation_maps': set(maps) >= {'crossroads','mayhem','frontier'},
-        'all_bots_spawn_on_each_map': bool(peak_live) and all(count == 64 for count in peak_live.values()),
+        'all_bots_spawn_on_each_map': bool(spawned) and all(count == 64 for count in spawned.values()),
         'simulation_rate': ticks >= .95*elapsed*25,
         'dropped_ticks_below_one_percent': 0 <= dropped < max(1,(ticks+dropped)*.01),
         'memory_within_budget': bool(memory) and max(memory) < 384*1024*1024,
@@ -47,7 +48,7 @@ def assess(samples, elapsed, journeys):
         'repeated_16_player_churn': journeys >= 32,
     }
     return {'checks':checks,'passed':all(checks.values()),'physics_ticks':ticks,'dropped_ticks':dropped,
-            'maps_seen':maps,'peak_live_by_map':peak_live,'peak_rss_bytes':max(memory,default=None),
+            'maps_seen':maps,'peak_live_by_map':peak_live,'spawned_by_map':spawned,'peak_rss_bytes':max(memory,default=None),
             'successful_journeys':journeys,'elapsed_seconds':round(elapsed,2)}
 
 

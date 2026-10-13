@@ -15,7 +15,7 @@ SOAK = runpy.run_path(str(Path(__file__).resolve().parents[1]/'scripts/qualify-s
 class SoakTests(unittest.TestCase):
     def sample(self, seconds=0, **overrides):
         return dict({'git_commit':'a'*40,'process_id':10,'updated_utc':datetime.now(timezone.utc).isoformat(),
-                     'bots':64,'sessions':64,'live_bots':64,'route_fields':80,'map':'crossroads',
+                     'bots':64,'sessions':64,'live_bots':62,'spawned_bots':64,'route_fields':80,'map':'crossroads',
                      'changing_map':False,'physics_ticks':int(seconds*25),'dropped_ticks':0,
                      'rss_bytes':100*1024*1024,'elapsed_seconds':seconds},**overrides)
 
@@ -35,6 +35,9 @@ class SoakTests(unittest.TestCase):
         self.assertFalse(SOAK['assess'](samples,600,32)['passed'])
         samples.append(self.sample(86400))
         self.assertTrue(SOAK['assess'](samples,86400,32)['passed'])
+        samples[1]['spawned_bots'] = 63
+        self.assertFalse(SOAK['assess'](samples,86400,32)['passed'])
+        samples[1]['spawned_bots'] = 64
         samples[-1]['rss_bytes'] *= 3
         self.assertFalse(SOAK['assess'](samples,86400,32)['passed'])
 

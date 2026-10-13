@@ -64,6 +64,7 @@ class BotSession:
     progress_check_at: float = 0.0
     recovery_until: float = 0.0
     spawn_position: tuple[float,float,float] | None = None
+    spawned_terrain: tuple[str,int] | None = None
     furthest_travel: float = 0.0
     engaging: bool = False
     tactical_slot: int = 0
@@ -245,6 +246,8 @@ class BotManager:
         bot.next_jump_at = math.inf
         bot.jump_release_at = None
         bot.spawn_position = spawn_pos
+        land = getattr(self.server,'land',None)
+        bot.spawned_terrain = (land.identity,land.revision) if land is not None else None
         bot.progress_position = spawn_pos
         bot.progress_check_at = now+3
         bot.recovery_until = 0
@@ -540,10 +543,17 @@ class BotManager:
         if getattr(self.server, "map_change_transition", None) is not None:
             return
         self.prepare_navigation()
+        land = getattr(self.server,'land',None)
+        terrain = (land.identity,land.revision) if land is not None else None
+        waiting = [bot for bot in self._bots if bot.entity is None and now >= bot.construction_ready_at]
+        # A small map may have only one pad per team. Never let repeated deaths
+        # of earlier roster entries starve players still awaiting a first spawn.
+        waiting.sort(key=lambda bot: (bot.spawn_position is not None and bot.spawned_terrain == terrain,
+                                      bot.construction_ready_at,bot.player_id))
+        for bot in waiting:
+            self._spawn(bot,now)
         for bot in tuple(self._bots):
             if bot.entity is None:
-                if now >= bot.construction_ready_at:
-                    self._spawn(bot, now)
                 continue
 
             if not bot.entity.is_manned:
