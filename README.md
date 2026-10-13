@@ -13,7 +13,7 @@ The public Pi 5 server runs 64 bots with 16 additional human places. The first
 stable release will focus on dependable matches, coordinated bots, clear
 onboarding and reliable graphics. A replacement client follows in stages,
 retaining the classic sci-fi identity and improving the HUD, assets and lighting.
-Windows comes first; native Linux support is deferred.
+Windows comes first; a native Linux client is deferred.
 
 The current release is an **alpha**. Release gates include automated checks and
 approval from the maintainer plus returning and new players. We are working
@@ -21,13 +21,17 @@ toward acceptance checks rather than promising release dates.
 
 ## Development status
 
-The default branch currently contains the original physics/server foundation
-and this roadmap. Playable revival work is available in the
-[development pull requests](https://github.com/n30nex/Wulfram-Revival/pulls), with
-the current qualification report in
-[PR #5](https://github.com/n30nex/Wulfram-Revival/pull/5).
-[M0](https://github.com/n30nex/Wulfram-Revival/issues/6) tracks integrating that
-work into the default branch and making the build and contribution path clear.
+`main` contains the maintained revival implementation, including the Pi server,
+CPU players, Windows display helper, client harness, packaging tools and player
+page. [PR #5](https://github.com/n30nex/Wulfram-Revival/pull/5) consolidates the
+earlier development branches; [M0](https://github.com/n30nex/Wulfram-Revival/issues/6)
+records the integration checks.
+
+See [release readiness](READINESS.md) for the exact deployed server/client
+revisions, verified results and remaining stable-release gates. The
+[revival guide](REVIVAL.md) covers setup, content preparation, gameplay and
+repeatable checks. [Contributing](CONTRIBUTING.md) explains how to build, test
+and propose changes.
 
 To help, choose an item from the [roadmap](ROADMAP.md), check its dependencies
 and completion checks, and discuss the scope in its issue. For a bug report,
@@ -59,6 +63,9 @@ other Wulfram asset. You must supply assets you are legally entitled to use.
 - `physics/bindings/python/`: 64-bit CPython extension
 - `server/`: authoritative Python Wulfram II server
 - `config/server.example.toml`: safe starting configuration
+- `client/windows/`: Windows display helper and its checks
+- `scripts/`: content, packaging, client-harness and verification tools
+- `site/`: public player page
 
 ## Requirements
 

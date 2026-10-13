@@ -1,0 +1,13 @@
+[Unit]
+Description=Publish Wulfram public match counters
+After=wulfram.service
+ConditionPathExists=/var/lib/wulfram/production/public.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/canadaverse/wulfram/current/scripts/publish-status.py --input /var/lib/wulfram/production/public.json --output /opt/canadaverse/splashpage/downloads/wulfram/site/current/status.json
+NoNewPrivileges=yes
+PrivateNetwork=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/canadaverse/splashpage/downloads/wulfram/site

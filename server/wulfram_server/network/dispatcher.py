@@ -61,6 +61,9 @@ class PacketDispatcher:
             )
 
         opcode = payload[0]
+        allow = getattr(server, "allow_packet", None)
+        if allow is not None and not allow(ctx, opcode):
+            return
         handler = self._handlers.get(opcode)
 
         if handler:
@@ -85,6 +88,9 @@ class PacketDispatcher:
 
             packet_start = reader.position_bits
             opcode = reader.read_byte()
+            allow = getattr(getattr(ctx, "server", None), "allow_packet", None)
+            if allow is not None and not allow(ctx, opcode):
+                break  # Unknown-length bodies cannot safely be skipped.
             handler = self._datagram_handlers.get(opcode)
 
             if handler is None:

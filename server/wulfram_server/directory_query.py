@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import time
 import uuid
 from collections.abc import Callable
 
@@ -41,6 +42,7 @@ def try_tcp_query(
     previous_timeout = sock.gettimeout()
     try:
         sock.settimeout(timeout)
+        deadline = time.monotonic() + timeout
         try:
             prefix = sock.recv(len(TCP_QUERY_MAGIC), socket.MSG_PEEK)
         except (BlockingIOError, TimeoutError, socket.timeout):
@@ -49,6 +51,10 @@ def try_tcp_query(
             return False
         request = bytearray()
         while len(request) < TCP_QUERY_SIZE:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            sock.settimeout(remaining)
             chunk = sock.recv(TCP_QUERY_SIZE - len(request))
             if not chunk:
                 return True
@@ -65,6 +71,8 @@ def try_tcp_query(
                 + bytes(request[nonce_start:nonce_end])
                 + instance_bytes(instance_id)
             )
+        return True
+    except OSError:
         return True
     finally:
         sock.settimeout(previous_timeout)

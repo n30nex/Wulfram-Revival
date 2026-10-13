@@ -1,0 +1,39 @@
+name: Build and CPU players
+on: [push, pull_request]
+jobs:
+  windows-display:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S client/windows -B build/windows-display -A Win32
+      - run: cmake --build build/windows-display --config Release
+      - run: ctest --test-dir build/windows-display -C Release --output-on-failure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wulfram-display-windows-x86
+          path: build/windows-display/Release/wulfram-display.exe
+  linux:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m unittest discover -s tests -v
+      - run: cmake -S physics -B build/physics-linux-x64 -DCMAKE_BUILD_TYPE=Release -DWULFRAM_PHYSICS_BUILD_TESTS=OFF
+      - run: cmake --build build/physics-linux-x64 --parallel 2
+      - run: sha256sum build/physics-linux-x64/*.so > build/physics-linux-x64/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wulfram-physics-${{ matrix.arch }}-python313
+          if-no-files-found: error
+          path: |
+            build/physics-linux-x64/*.so
+            build/physics-linux-x64/SHA256SUMS

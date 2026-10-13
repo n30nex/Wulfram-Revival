@@ -1896,39 +1896,69 @@ float GroundAngle(const JetRuntime& jet, int a, int b) noexcept {
     return std::asin(std::clamp(ratio, -1.0F, 1.0F));
 }
 
+struct ProbeTriangle {
+    Vec3f a{}, b{}, c{}, normal{};
+};
+
 struct ProbeBodySurface {
     EntityId id = 0;
     BodyState body{};
-    const CollisionShape* shape = nullptr;
+    std::vector<ProbeTriangle> triangles{};
+    Vec3f minimum{std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(), 0.0F};
+    Vec3f maximum{-std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(), 0.0F};
 };
+
+ProbeBodySurface PrepareProbeSurface(
+    EntityId id, const BodyState& body, const CollisionShape& shape) {
+    ProbeBodySurface surface{id, body, {}};
+    const std::vector<Vec3f> vertices = TransformVertices(body, shape);
+    surface.triangles.reserve(shape.triangles.size());
+    for (const auto& indices : shape.triangles) {
+        if (indices[0] >= vertices.size() || indices[1] >= vertices.size() || indices[2] >= vertices.size()) {
+            continue;
+        }
+        const Vec3f a = vertices[indices[0]], b = vertices[indices[1]], c = vertices[indices[2]];
+        const Vec3f normal = Cross(b - a, c - a);
+        if (std::fabs(normal.z) > 1.0e-6F) {
+            surface.triangles.push_back({a, b, c, normal});
+            const float minX = std::min({a.x, b.x, c.x}), maxX = std::max({a.x, b.x, c.x});
+            const float minY = std::min({a.y, b.y, c.y}), maxY = std::max({a.y, b.y, c.y});
+            const float normalSquared = Dot(normal, normal);
+            // The edge tests allow barycentric weights down to -0.001/|n|^2.
+            // Enclose that relaxed triangle as well as ordinary float error.
+            // Nearly vertical triangles retain the uncropped legacy path.
+            float padding = std::max(1.0F,
+                (2.0e-3F / normalSquared) * std::max(maxX - minX, maxY - minY));
+            padding += 64.0F * std::numeric_limits<float>::epsilon() *
+                std::max({std::fabs(minX), std::fabs(maxX), std::fabs(minY), std::fabs(maxY)});
+            if (std::fabs(normal.z) < 1.0e-4F * std::sqrt(normalSquared)) {
+                padding = std::numeric_limits<float>::infinity();
+            }
+            surface.minimum.x = std::min(surface.minimum.x, minX - padding);
+            surface.minimum.y = std::min(surface.minimum.y, minY - padding);
+            surface.maximum.x = std::max(surface.maximum.x, maxX + padding);
+            surface.maximum.y = std::max(surface.maximum.y, maxY + padding);
+        }
+    }
+    return surface;
+}
 
 bool FindVerticalBodyProbeHit(
     const Vec3f& probe,
     const ProbeBodySurface& surface,
     Vec3f& pointOut,
     Vec3f& normalOut) noexcept {
-    if (surface.shape == nullptr) {
+    if (probe.x < surface.minimum.x || probe.x > surface.maximum.x ||
+        probe.y < surface.minimum.y || probe.y > surface.maximum.y) {
         return false;
     }
-
     bool found = false;
     float highestZ = -std::numeric_limits<float>::infinity();
-    for (const auto& indices : surface.shape->triangles) {
-        if (indices[0] >= surface.shape->vertices.size() ||
-            indices[1] >= surface.shape->vertices.size() ||
-            indices[2] >= surface.shape->vertices.size()) {
-            continue;
-        }
-        const Vec3f a = surface.body.orientation.Transform(
-            surface.shape->vertices[indices[0]]) + surface.body.position;
-        const Vec3f b = surface.body.orientation.Transform(
-            surface.shape->vertices[indices[1]]) + surface.body.position;
-        const Vec3f c = surface.body.orientation.Transform(
-            surface.shape->vertices[indices[2]]) + surface.body.position;
-        Vec3f planeNormal = Cross(b - a, c - a);
-        if (std::fabs(planeNormal.z) <= 1.0e-6F) {
-            continue;
-        }
+    for (const ProbeTriangle& triangle : surface.triangles) {
+        const Vec3f& a = triangle.a;
+        const Vec3f& b = triangle.b;
+        const Vec3f& c = triangle.c;
+        const Vec3f& planeNormal = triangle.normal;
         const float hitZ = a.z -
             (planeNormal.x * (probe.x - a.x) +
              planeNormal.y * (probe.y - a.y)) / planeNormal.z;
@@ -2617,14 +2647,14 @@ bool World::ApplyLinearImpulse(EntityId id, const Vec3f& impulse) noexcept {
 
 bool World::ConsumeFuel(EntityId id, float amount) noexcept {
     const auto found=entities_.find(id);
-    if(found==entities_.end()||amount<0.0F||found->second->fuel<amount)return false;
+    if(found==entities_.end()||!std::isfinite(amount)||amount<0.0F||found->second->fuel<amount)return false;
     found->second->fuel-=amount;
     return true;
 }
 
 bool World::AddFuel(EntityId id, float amount) noexcept {
     const auto found=entities_.find(id);
-    if(found==entities_.end()||amount<=0.0F)return false;
+    if(found==entities_.end()||!std::isfinite(amount)||amount<=0.0F)return false;
     Entity& entity=*found->second;
     const auto& vehicle=entity.controllerType==ControllerType::Scout?config_.scout:config_.tank;
     const float previous=entity.fuel;
@@ -2721,11 +2751,12 @@ bool World::StepWorld(SimulationTick tick, StepMilliseconds stepMilliseconds) {
     staticSurfaces.reserve(entities_.size());
     for (const auto& [surfaceId, surfacePointer] : entities_) {
         if (surfacePointer->alive) {
-            bodySurfaces.push_back({
+            // All hover probes use the same start-of-tick body poses. Transform
+            // each mesh once, rather than once per triangle per probe per Tank.
+            bodySurfaces.push_back(PrepareProbeSurface(
                 surfaceId,
                 surfacePointer->body,
-                &surfacePointer->collisionShape,
-            });
+                surfacePointer->collisionShape));
             if (surfacePointer->motionType == BodyMotionType::Static) {
                 staticSurfaces.push_back({
                     surfaceId,

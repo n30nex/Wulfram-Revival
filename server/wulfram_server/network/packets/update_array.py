@@ -2,14 +2,16 @@ from wulfram_server.network.streams import PacketWriter
 from wulfram_server.network.translation_config import *
 from wulfram_server.core.config import get_ticks
 from wulfram_server.core.entity import GameEntity, UpdateMask
+from .weapon_state import write_ready_mask, write_local_weapon_state
 
 class EntitySerializer:
     """
     Helper class that handles the specific bit-writing order 
     required by the C++ client's 'WIP_read_array_from_bitstream'.
     """
-    def __init__(self, writer: PacketWriter):
+    def __init__(self, writer: PacketWriter, entity_cache: dict | None = None):
         self.writer = writer
+        self.entity_cache = entity_cache
 
     def serialize(
         self,
@@ -18,6 +20,18 @@ class EntitySerializer:
         forced_mask: int | None = None,
         viewer_team: int | None = None,
     ):
+        if self.entity_cache is not None:
+            # Cache only world records for this broadcast, never local vitals.
+            # Keep the exact bit length because records are not byte-aligned.
+            key = (entity.net_id, force_definition, forced_mask, viewer_team)
+            if key not in self.entity_cache:
+                writer = PacketWriter()
+                EntitySerializer(writer).serialize(entity, force_definition, forced_mask, viewer_team)
+                length = writer.position_bits
+                value = int.from_bytes(writer.get_bytes(), "big") >> (-length % 8)
+                self.entity_cache[key] = (value, length)
+            self.writer.write_bits(*self.entity_cache[key])
+            return
         # 1. Determine the Mask
         # If forced_mask is provided, use it. Otherwise, use entity's current dirty state.
         mask = forced_mask if forced_mask is not None else entity.pending_mask
@@ -27,7 +41,7 @@ class EntitySerializer:
             mask |= UpdateMask.DEFINITION
         # Only entity types with an enabled Behavior weapon table may carry
         # the compact inventory state. Tank uses table 0; Gun Turret uses 3.
-        if entity.unit_type not in (0, 30):
+        if entity.unit_type not in (0, 1, 30):
             mask &= ~UpdateMask.WEAPON
             
         # 2. Write Header (Standard for every entity)
@@ -98,17 +112,7 @@ class EntitySerializer:
             # Net_Read_Weapon_Inventory first selects the compact Behavior
             # table, then consumes only the bit groups enabled by that table.
             self.writer.write_bits(entity.weapon_table_id, GLOBAL_CONFIGS[1]['head'])
-            if entity.weapon_table_id == 0:
-                # Tank Behavior enables the firing-state channel for slots 0
-                # and 4, in slot order.
-                self.writer.write_bits(entity.weapon_ready_mask & 0b11, 2)
-            elif entity.weapon_table_id == 1:
-                # Scout Behavior enables the machine-gun and repair channels.
-                self.writer.write_bits(entity.weapon_ready_mask & 0b11, 2)
-            elif entity.weapon_table_id == 3:
-                # Gun Turret enables the ready/firing-state channel only for
-                # slot zero.
-                self.writer.write_bits(entity.weapon_ready_mask & 0b1, 1)
+            write_ready_mask(self.writer, entity.weapon_table_id, entity.weapon_ready_mask)
 
         # Bit 7: Energy
         if mask & UpdateMask.ENERGY:
@@ -158,6 +162,7 @@ class UpdateArrayPacket:
         reconciliation_tick: int | None = None,
         acknowledged_input_marker: int | None = None,
         acknowledged_input_tick: int | None = None,
+        entity_cache: dict | None = None,
     ):
         self.writer = PacketWriter()
         self.sequence_id = sequence_id
@@ -167,6 +172,7 @@ class UpdateArrayPacket:
         self.reconciliation_tick = reconciliation_tick
         self.acknowledged_input_marker = acknowledged_input_marker
         self.acknowledged_input_tick = acknowledged_input_tick
+        self.entity_cache = entity_cache
 
         # Timestamp
         if (is_view_update):
@@ -182,6 +188,7 @@ class UpdateArrayPacket:
         weapon_table_id: int = 0,
         weapon_ready_mask: int = 0,
         pulse_charge: float = 1.0,
+        repair_charge: float = 1.0,
     ):
         """
         Sets the HUD stats for the player receiving this packet.
@@ -193,6 +200,7 @@ class UpdateArrayPacket:
             weapon_table_id,
             weapon_ready_mask,
             pulse_charge,
+            repair_charge,
         )
 
     def add_entity(self, entity: GameEntity, force_spawn=False, forced_mask: int | None = None):
@@ -212,32 +220,21 @@ class UpdateArrayPacket:
             
             self.writer.write_bits(h_val, h_bits)
             self.writer.write_bits(e_val, e_bits)
-            # Tank table 0 has two firing-state bits (autocannon, pulse) and
-            # an enabled pulse slot, which makes the trailing charge required.
-            if self.local_stats[2] == 0:
-                self.writer.write_bits(self.local_stats[3] & 0b11, 2)
-                pulse_config = get_config_by_index(13)
-                _, pulse_val, pulse_bits = pulse_config.compress(self.local_stats[4])
-                self.writer.write_bits(pulse_val, pulse_bits)
-            elif self.local_stats[2] == 1:
-                # Scout has two state channels plus the repair-charge scalar
-                # required by its available slot 1. Repair is continuously
-                # usable in the authoritative server, so publish full charge.
-                self.writer.write_bits(self.local_stats[3] & 0b11, 2)
-                repair_config = get_config_by_index(14)
-                _, repair_val, repair_bits = repair_config.compress(1.0)
-                self.writer.write_bits(repair_val, repair_bits)
+            write_local_weapon_state(self.writer, self.local_stats[2], self.local_stats[3],
+                                     self.local_stats[4], self.local_stats[5])
         else:
             # If 0, client skips Parse_SpawnVitalStats
             self.writer.write_bool(False) 
 
         # --- SECTION 2: Entity Loop ---
         count = len(self.entities)
+        if count > 255:
+            raise ValueError("UPDATE_ARRAY can contain at most 255 entities; split the snapshot")
         
         # Total Entity Count (8 bits)
         self.writer.write_bits(count, 8)
 
-        serializer = EntitySerializer(self.writer)
+        serializer = EntitySerializer(self.writer, self.entity_cache)
         
         for entity, force_spawn, forced_mask in self.entities:
             serializer.serialize(

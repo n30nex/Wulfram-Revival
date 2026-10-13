@@ -1,0 +1,29 @@
+[server]
+environment = "production"
+display_name = "Canadaverse Wulfram II"
+motd = "64 CPU players. Destroy enemy repair pads and vehicles, or lead on points when time expires."
+map_name = "crossroads"
+map_rotation = ["crossroads", "mayhem", "frontier"]
+player_nametag = "CANADA"
+player_limit = 80
+bots_per_team = 32
+round_seconds = 1200
+state_directory = "/var/lib/wulfram/production"
+log_directory = "/var/log/wulfram/production"
+shutdown_timeout_seconds = 15.0
+
+[network]
+host = "192.168.0.24"
+server_ip = "66.11.160.214"
+tcp_port = 2627
+udp_port = 2627
+
+[authentication]
+password_environment = "WULFRAM_PLAYER_PASSWORD"
+admin_password_environment = "WULFRAM_ADMIN_PASSWORD"
+
+[logging]
+debug_packets = false
+show_ascii = false
+debug_actions = false
+debug_action_packets = false

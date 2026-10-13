@@ -9,13 +9,14 @@ from wulfram_server.core.entity import GameEntity, NEUTRAL_TEAM_ID, UpdateMask
 
 AUTOCANNON_ACTION = 8
 PULSE_ACTION = 12
+REPAIR_ACTION = 9
+PIERCER_ACTION = 13
 FLAK_SHELL_UNIT_TYPE = 5
 PULSE_UNIT_TYPE = 6
 TANK_UNIT_TYPE = 0
 FLAK_TURRET_UNIT_TYPE = 29
 GUN_TURRET_UNIT_TYPE = 30
 PLAYER_VEHICLE_UNIT_TYPES = frozenset({0, 1})
-MAXIMUM_TANK_FUEL = 33000.0
 GUN_TURRET_MUZZLE_OFFSET = 6.5
 
 # Named `missile_pos` attachment points recovered from the full Wulfram II
@@ -32,6 +33,7 @@ TANK_PULSE_MUZZLE_LOCAL_BY_TEAM = {
 class Destruction:
     entity_id: int
     explosion: bool = True
+    killer_player_id: int = 0
 
 
 def _add(a, b):
@@ -165,16 +167,91 @@ class CombatSystem:
                 continue
             if entity.unit_type == TANK_UNIT_TYPE:
                 self._advance_tank_weapons(entity, seconds, destroyed)
+            elif entity.unit_type == 1:
+                self._advance_scout_weapons(entity, seconds, destroyed)
             elif entity.unit_type == GUN_TURRET_UNIT_TYPE:
                 self._advance_gun_turret(entity, seconds, destroyed)
             elif entity.unit_type == FLAK_TURRET_UNIT_TYPE:
                 self._advance_flak_turret(entity, seconds)
+        self._service_pads(seconds)
         return list(destroyed.values())
 
     def _set_weapon_mask(self, entity: GameEntity, mask: int) -> None:
         if entity.weapon_ready_mask != mask:
             entity.weapon_ready_mask = mask
             entity.mark_dirty(UpdateMask.WEAPON)
+
+    def _autocannon_parameters(self, entity):
+        if entity.unit_type == 1:
+            return (self.cfg.scout_machinegun_damage, self.cfg.scout_machinegun_fuel_cost,
+                    self.cfg.scout_machinegun_refire_seconds, self.cfg.scout_machinegun_range,
+                    self.cfg.scout_machinegun_autoaim_degrees)
+        return (self.cfg.autocannon_damage, self.cfg.autocannon_fuel_cost,
+                self.cfg.autocannon_refire_seconds, self.cfg.autocannon_range,
+                self.cfg.autocannon_autoaim_degrees)
+
+    def _advance_scout_weapons(self, scout, seconds, destroyed):
+        if not scout.is_manned or scout.health_points <= 0:
+            return
+        scout.autocannon_cooldown = max(0.0, scout.autocannon_cooldown - seconds)
+        previous_charge = scout.repair_charge
+        mask, repairing = 0, False
+        if scout.actions.get(REPAIR_ACTION, 0) and scout.repair_charge > 0:
+            forward = _forward(scout.rot)
+            candidates = []
+            for target in self.server.entities.get_all():
+                if (target is scout or target.team_id != scout.team_id or target.health_points <= 0
+                        or target.health_points >= target.max_health or target.unit_type not in (0, 1, 25, 26, 27, 29, 30)):
+                    continue
+                offset = _sub(target.pos, scout.pos)
+                distance = _length(offset)
+                if 0.001 < distance <= self.cfg.repair_range and _dot(forward, _scale(offset, 1/distance)) >= math.cos(math.radians(12)):
+                    candidates.append((target.health, distance, target.net_id, target))
+            target = min(candidates, default=(None, None, None, None))[-1]
+            if target is not None:
+                hit = self.server.physics.trace_segment(_add(scout.pos, _scale(forward, 4.5)),
+                                                       target.pos, ignored_entity=scout.net_id)
+                duration = min(seconds, scout.repair_charge * self.cfg.repair_capacity_seconds)
+                if (hit["hit"] and int(hit["entity_id"]) == target.net_id
+                        and self.server.physics.spend_fuel(scout, self.cfg.repair_fuel_per_second * duration)):
+                    restored = min(target.max_health-target.health_points, self.cfg.repair_health_per_second * duration)
+                    target.set_health_points(target.health_points + restored)
+                    scout.repair_charge = max(0.0, scout.repair_charge - duration / self.cfg.repair_capacity_seconds)
+                    self._set_turret_target(scout, target)
+                    mask, repairing = 2, True
+                    from wulfram_server.matches import record_repair
+                    record_repair(self.server, scout.score_owner_id, restored)
+        if not repairing:
+            scout.repair_charge = min(1.0, scout.repair_charge + seconds / self.cfg.repair_regeneration_seconds)
+            if scout.actions.get(AUTOCANNON_ACTION, 0):
+                _, cost, interval, _, _ = self._autocannon_parameters(scout)
+                mask = 1
+                if scout.autocannon_cooldown <= 0 and self.server.physics.spend_fuel(scout, cost):
+                    self._fire_autocannon(scout, destroyed)
+                    scout.autocannon_cooldown = max(0.0, interval + scout.autocannon_cooldown)
+        if abs(previous_charge - scout.repair_charge) > 1.0e-9:
+            scout.mark_dirty(UpdateMask.WEAPON)
+        self._set_weapon_mask(scout, mask)
+
+    def _service_pads(self, seconds):
+        pads = [entity for entity in self.server.entities.get_all()
+                if entity.unit_type in (26, 27) and entity.health_points > 0]
+        for session in self.server.sessions:
+            entity = session.entity
+            if entity is None or not entity.is_manned or entity.health_points <= 0 or _length(entity.vel) > 25:
+                continue
+            serviced = set()
+            for pad in pads:
+                if pad.team_id != entity.team_id or pad.unit_type in serviced:
+                    continue
+                offset = _sub(entity.pos, pad.pos)
+                if math.hypot(offset[0], offset[1]) > 22 or abs(offset[2]) > 35:
+                    continue
+                serviced.add(pad.unit_type)
+                if pad.unit_type == 26:
+                    self.server.physics.refuel(entity, 3000.0 * seconds)
+                elif entity.health_points < entity.max_health:
+                    entity.set_health_points(entity.health_points + 30.0 * seconds)
 
     def _select_turret_target(
         self,
@@ -269,7 +346,7 @@ class CombatSystem:
         ):
             return
         if victim.apply_damage(self.cfg.gun_turret_damage):
-            destroyed[victim.net_id] = Destruction(victim.net_id)
+            destroyed[victim.net_id] = Destruction(victim.net_id, killer_player_id=turret.score_owner_id)
 
     def _advance_flak_turret(self, turret: GameEntity, seconds: float) -> None:
         self._advance_flak_recoil(turret, seconds)
@@ -364,6 +441,7 @@ class CombatSystem:
         projectile.rot = _rotation_toward(direction)
         projectile.vel = _scale(direction, self.cfg.flak_turret_muzzle_speed)
         projectile.related_object_id = turret.net_id
+        projectile.score_owner_id = turret.score_owner_id
         projectile.projectile_target_id = target.net_id
         self._flak_positions[projectile.net_id] = projectile.pos
         self._flak_previous_target_distance[projectile.net_id] = _length(
@@ -385,6 +463,7 @@ class CombatSystem:
     ) -> None:
         tank.autocannon_cooldown = max(0.0, tank.autocannon_cooldown - seconds)
         tank.pulse_cooldown = max(0.0, tank.pulse_cooldown - seconds)
+        tank.piercer_cooldown = max(0.0, tank.piercer_cooldown - seconds)
         previous_charge = tank.pulse_charge
         tank.pulse_charge = min(
             1.0,
@@ -402,7 +481,7 @@ class CombatSystem:
             firing_mask |= 1
             if (
                 tank.autocannon_cooldown <= 0.0
-                and tank.energy >= self.cfg.autocannon_fuel_cost / MAXIMUM_TANK_FUEL
+                and self.server.physics.spend_fuel(tank, self.cfg.autocannon_fuel_cost)
             ):
                 self._fire_autocannon(tank, destroyed)
                 # At most one discharge per server tick, preserving the
@@ -411,11 +490,6 @@ class CombatSystem:
                     0.0,
                     self.cfg.autocannon_refire_seconds + tank.autocannon_cooldown,
                 )
-                tank.energy = max(
-                    0.0,
-                    tank.energy - self.cfg.autocannon_fuel_cost / MAXIMUM_TANK_FUEL,
-                )
-                tank.mark_dirty(UpdateMask.ENERGY)
 
         if pulse_pressed:
             firing_mask |= 2
@@ -424,16 +498,17 @@ class CombatSystem:
             and not previous_pulse_pressed
             and tank.pulse_cooldown <= 0.0
             and tank.pulse_charge >= self.cfg.pulse_minimum_strength
-            and tank.energy >= self.cfg.pulse_fuel_cost / MAXIMUM_TANK_FUEL
+            and self.server.physics.spend_fuel(tank, self.cfg.pulse_fuel_cost)
         ):
             self._fire_pulse(tank)
             tank.pulse_charge = 0.0
             tank.pulse_cooldown = self.cfg.pulse_refire_seconds
-            tank.energy = max(
-                0.0,
-                tank.energy - self.cfg.pulse_fuel_cost / MAXIMUM_TANK_FUEL,
-            )
-            tank.mark_dirty(UpdateMask.ENERGY)
+
+        if tank.actions.get(PIERCER_ACTION, 0):
+            firing_mask |= 4
+            if tank.piercer_cooldown <= 0 and self.server.physics.spend_fuel(tank, self.cfg.piercer_fuel_cost):
+                self._fire_pulse(tank, piercer=True)
+                tank.piercer_cooldown = self.cfg.piercer_refire_seconds
 
         if pulse_pressed:
             tank.previous_weapon_actions |= 1 << PULSE_ACTION
@@ -442,7 +517,8 @@ class CombatSystem:
         self._set_weapon_mask(tank, firing_mask)
 
     def _select_autocannon_target(self, tank: GameEntity, origin, forward):
-        cosine_limit = math.cos(math.radians(self.cfg.autocannon_autoaim_degrees))
+        _, _, _, maximum_range, aim = self._autocannon_parameters(tank)
+        cosine_limit = math.cos(math.radians(aim))
         best = None
         for candidate in self.server.entities.get_all():
             if (
@@ -457,7 +533,7 @@ class CombatSystem:
                 continue
             offset = _sub(candidate.pos, origin)
             distance = _length(offset)
-            if distance <= 1.0e-6 or distance > self.cfg.autocannon_range:
+            if distance <= 1.0e-6 or distance > maximum_range:
                 continue
             direction = _scale(offset, 1.0 / distance)
             cosine = _dot(forward, direction)
@@ -473,6 +549,7 @@ class CombatSystem:
         tank: GameEntity,
         destroyed: dict[int, Destruction],
     ) -> None:
+        damage, _, _, maximum_range, aim = self._autocannon_parameters(tank)
         forward = _forward(tank.rot)
         origin = _add(tank.pos, _scale(forward, 4.5))
         selected = self._select_autocannon_target(tank, origin, forward)
@@ -484,7 +561,7 @@ class CombatSystem:
         direction = selected[2] if selected is not None else forward
         if selected is not None:
             angle = math.acos(max(-1.0, min(1.0, selected[3])))
-            error_ratio = angle / math.radians(self.cfg.autocannon_autoaim_degrees)
+            error_ratio = angle / math.radians(aim)
         else:
             error_ratio = 0.6
         self._shot_sequence += 1
@@ -507,7 +584,7 @@ class CombatSystem:
                 ),
             ))
 
-        end = _add(origin, _scale(direction, self.cfg.autocannon_range))
+        end = _add(origin, _scale(direction, maximum_range))
         hit = self.server.physics.trace_segment(
             origin,
             end,
@@ -524,10 +601,10 @@ class CombatSystem:
             self.cfg.friendly_fire,
         ):
             return
-        if victim.apply_damage(self.cfg.autocannon_damage):
-            destroyed[victim.net_id] = Destruction(victim.net_id)
+        if victim.apply_damage(damage):
+            destroyed[victim.net_id] = Destruction(victim.net_id, killer_player_id=tank.score_owner_id)
 
-    def _fire_pulse(self, tank: GameEntity) -> None:
+    def _fire_pulse(self, tank: GameEntity, *, piercer: bool = False) -> None:
         forward = _forward(tank.rot)
         local_muzzle = TANK_PULSE_MUZZLE_LOCAL_BY_TEAM.get(
             tank.team_id,
@@ -541,9 +618,14 @@ class CombatSystem:
         )
         projectile.is_manned = False
         projectile.rot = tank.rot
-        projectile.vel = _add(tank.vel, _scale(forward, self.cfg.pulse_launch_speed))
+        speed = self.cfg.piercer_launch_speed if piercer else self.cfg.pulse_launch_speed
+        projectile.vel = _add(tank.vel, _scale(forward, speed))
         projectile.related_object_id = tank.net_id
-        projectile.pulse_strength = tank.pulse_charge
+        projectile.score_owner_id = tank.score_owner_id
+        projectile.pulse_strength = 1.0 if piercer else tank.pulse_charge
+        # Reuse the supported shell presentation; the authoritative fast
+        # direct-hit variant has no pulse splash or area impulse.
+        projectile.projectile_kind = "piercer" if piercer else "pulse"
         self._pulse_positions[projectile.net_id] = projectile.pos
         projectile.mark_dirty(
             UpdateMask.POS
@@ -694,7 +776,7 @@ class CombatSystem:
             self.cfg.friendly_fire,
         ):
             if direct.apply_damage(self.cfg.flak_shell_direct_damage):
-                destroyed[direct.net_id] = Destruction(direct.net_id)
+                destroyed[direct.net_id] = Destruction(direct.net_id, killer_player_id=projectile.score_owner_id)
 
         inner_radius = self.cfg.flak_shell_minimum_radius
         outer_radius = self.cfg.flak_shell_maximum_radius
@@ -723,7 +805,7 @@ class CombatSystem:
                         1.0e-6,
                     )
                 if victim.apply_damage(self.cfg.flak_shell_splash_damage * damage_falloff):
-                    destroyed[victim.net_id] = Destruction(victim.net_id)
+                    destroyed[victim.net_id] = Destruction(victim.net_id, killer_player_id=projectile.score_owner_id)
             if distance <= self.cfg.flak_shell_force_radius:
                 impulse_falloff = 1.0 - distance / max(
                     self.cfg.flak_shell_force_radius,
@@ -742,13 +824,18 @@ class CombatSystem:
         destroyed: dict[int, Destruction],
     ) -> None:
         direct = self.server.entities.get_entity(direct_entity_id) if direct_entity_id else None
+        if projectile.projectile_kind == "piercer":
+            if direct is not None and _can_damage(projectile.team_id, direct.team_id, self.cfg.friendly_fire):
+                if direct.apply_damage(self.cfg.piercer_damage):
+                    destroyed[direct.net_id] = Destruction(direct.net_id, killer_player_id=projectile.score_owner_id)
+            return
         if direct is not None and _can_damage(
             projectile.team_id,
             direct.team_id,
             self.cfg.friendly_fire,
         ):
             if direct.apply_damage(self.cfg.pulse_direct_damage * projectile.pulse_strength):
-                destroyed[direct.net_id] = Destruction(direct.net_id)
+                destroyed[direct.net_id] = Destruction(direct.net_id, killer_player_id=projectile.score_owner_id)
 
         radius = self.cfg.pulse_minimum_radius + (
             self.cfg.pulse_maximum_radius - self.cfg.pulse_minimum_radius
@@ -771,7 +858,7 @@ class CombatSystem:
                 continue
             falloff = 1.0 - distance / max(radius, 1.0e-6)
             if victim.apply_damage(self.cfg.pulse_splash_damage * projectile.pulse_strength * falloff):
-                destroyed[victim.net_id] = Destruction(victim.net_id)
+                destroyed[victim.net_id] = Destruction(victim.net_id, killer_player_id=projectile.score_owner_id)
             if distance <= self.cfg.pulse_force_radius and self.server.physics is not None:
                 direction = _normalize(offset, (0.0, 0.0, 1.0))
                 self.server.physics.apply_linear_impulse(

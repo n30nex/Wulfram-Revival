@@ -18,7 +18,7 @@ while improving assets, lighting and readability.
 - Make the default match welcoming: moderate bots, a guided first deployment
   and brief, visible spawn protection that ends when the player attacks.
 - Stabilize the current playable Windows release before developing the
-  replacement client in stages. Native Linux support is deferred.
+  replacement client in stages. A native Linux client is deferred.
 - Prioritize coordinated attacks, flanking, retreat and getting unstuck in the
   first major bot upgrade.
 - Qualify the existing feature set for the first stable release. Deeper original
@@ -34,11 +34,11 @@ public server, 64-bot matches and development work on display compatibility,
 tactical roles and reliability. Stable qualification remains open, including
 display/input coverage, sustained operation and mixed-experience playtests.
 
-Revival development is currently spread across open pull requests while the
-default branch contains the physics/server foundation. M0 brings reviewed work
-and reproducible build instructions together. See the
-[current readiness work](https://github.com/n30nex/Wulfram-Revival/pull/5) for
-candidate-specific evidence and remaining limitations.
+The reviewed alpha implementation is integrated into the default branch through
+[PR #5](https://github.com/n30nex/Wulfram-Revival/pull/5). M0 establishes this
+public development baseline and its reproducible build instructions. See
+[release readiness](READINESS.md) for candidate-specific evidence, deployed
+source/package identities and remaining limitations.
 
 Issue checklists and milestones hold live progress. This document records scope,
 sequence and release rules; an item stays open until its completion checks have
@@ -144,7 +144,7 @@ modes or account systems after the replacement client becomes playable.
 ## Later candidates
 
 Accounts, persistent progression, squads, further modes/maps/vehicles/weapons
-and native Linux support remain unscheduled. Some related alpha features already
+and a native Linux client remain unscheduled. Some related alpha features already
 exist; future work should assess and extend them instead of assuming a blank
 slate. These candidates must not displace the agreed stable-release gates or
 the priority for restored original systems and logistics bots.

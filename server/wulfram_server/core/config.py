@@ -38,6 +38,8 @@ class GameConfig:
     map_name: str = "crossroads"
     map_rotation: tuple[str, ...] = ("crossroads", "mayhem", "meltdown")
     player_limit: int = 20
+    bots_per_team: int = 0
+    round_seconds: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +152,8 @@ class Config:
                 "map_rotation",
                 "player_nametag",
                 "player_limit",
+                "bots_per_team",
+                "round_seconds",
                 "state_directory",
                 "log_directory",
                 "shutdown_timeout_seconds",
@@ -308,6 +312,13 @@ class Config:
 
         tcp_port = _integer(network, "tcp_port", "[network]", minimum=1, maximum=65535)
         udp_port = _integer(network, "udp_port", "[network]", minimum=1, maximum=65535)
+        player_limit = _integer(server, "player_limit", "[server]", minimum=1, maximum=128)
+        bots_per_team = (
+            _integer(server, "bots_per_team", "[server]", minimum=0, maximum=32)
+            if "bots_per_team" in server else 0
+        )
+        if 2 * bots_per_team >= player_limit:
+            raise ConfigurationError("server.bots_per_team must leave at least one human player slot")
 
         return cls(
             network=NetworkConfig(
@@ -321,9 +332,10 @@ class Config:
                 motd=_string(server, "motd", "[server]"),
                 map_name=map_name,
                 map_rotation=map_rotation,
-                player_limit=_integer(
-                    server, "player_limit", "[server]", minimum=1, maximum=64
-                ),
+                player_limit=player_limit,
+                bots_per_team=bots_per_team,
+                round_seconds=_integer(server, "round_seconds", "[server]", minimum=0, maximum=7200)
+                    if "round_seconds" in server else 0,
             ),
             player=PlayerConfig(
                 nametag=_string(server, "player_nametag", "[server]")

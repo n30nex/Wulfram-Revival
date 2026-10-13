@@ -28,7 +28,7 @@ def main() -> int:
     scout_shape_path = collision_root / "scout_2_s"
     pulse_shape_path = collision_root / "pulse_shell_s"
 
-    require(native.api_version() == native.API_VERSION == 12, "binding API version mismatch")
+    require(native.api_version() == native.API_VERSION == 13, "binding API version mismatch")
     world = native.create_world(
         count_x=4,
         count_y=4,
@@ -227,6 +227,25 @@ def main() -> int:
     require(projectile["position"][2] < 20.0, "native projectile did not receive gravity")
     require(projectile["controller_type"] == 0, "native projectile acquired a Tank controller")
     native.destroy_entity(world, 11)
+    fuel_world = native.create_world(count_x=4, count_y=4, spacing_x=10.0, spacing_y=10.0,
+        heights_x_major=[0.0] * 16, terrain_identity="fuel-test",
+        configuration={"gravity_magnitude": 0.0, "fuel_regeneration_per_second": 0.0})
+    native.create_tank(world=fuel_world, entity_id=17, team=1, position=(15.0, 15.0, 50.0),
+        linear_velocity=(0.0, 0.0, 0.0), euler_radians=(0.0, 0.0, 0.0), angular_velocity=(0.0, 0.0, 0.0),
+        collision_asset=shape_path.read_bytes(), collision_identity="tank_1_s", fuel=100.0, jet_strength=0.0)
+    require(native.consume_fuel(fuel_world, 17, 30.0), "fuel debit rejected")
+    native.step_world(fuel_world, 1, 40)
+    require(native.write_snapshot(fuel_world)["entities"][0]["fuel"] == 70.0,
+        "physics step restored spent weapon fuel")
+    require(not native.consume_fuel(fuel_world, 17, 80.0), "insufficient fuel was accepted")
+    require(native.add_fuel(fuel_world, 17, 20.0), "refuel rejected")
+    require(native.write_snapshot(fuel_world)["entities"][0]["fuel"] == 90.0, "refuel did not persist")
+    for invalid in (float("nan"), float("inf"), -1.0):
+        try:
+            native.consume_fuel(fuel_world, 17, invalid)
+            raise RuntimeError("invalid fuel amount accepted")
+        except ValueError:
+            pass
     print("WulframPhysicsPython binding tests passed")
     return 0
 

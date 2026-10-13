@@ -104,11 +104,16 @@ class GameEntity:
     # for their selected autocannon target while projectiles use it for their
     # shooter/mother object.
     related_object_id: int = 0
+    score_owner_id: int = 0
     weapon_table_id: int = 0
     weapon_ready_mask: int = 0
     autocannon_cooldown: float = 0.0
     pulse_cooldown: float = 0.0
     pulse_charge: float = 1.0
+    repair_charge: float = 1.0
+    piercer_cooldown: float = 0.0
+    projectile_kind: str = "pulse"
+    vehicle_loadout: str = "tank"
     pulse_strength: float = 0.0
     projectile_age: float = 0.0
     projectile_target_id: int = 0
@@ -148,11 +153,13 @@ class GameEntity:
     # each needs to retain changes until its next send.
     pending_mask: int = 0
     pending_view_mask: int = 0
+    dirty_generation: int = field(default=0, repr=False)
 
     def mark_dirty(self, mask: UpdateMask):
         """Flag specific fields to be sent in the next update."""
         self.pending_mask |= mask
         self.pending_view_mask |= mask
+        self.dirty_generation += 1
 
     def clear_update_dirty(self):
         """Reset flags consumed by remote update-array packets."""

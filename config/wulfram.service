@@ -1,0 +1,38 @@
+[Unit]
+Description=Canadaverse Wulfram II game server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=45
+TimeoutStartSec=90
+TimeoutAbortSec=5
+LimitCORE=0
+DynamicUser=yes
+StateDirectory=wulfram/production
+LogsDirectory=wulfram/production
+WorkingDirectory=/opt/canadaverse/wulfram/current
+EnvironmentFile=/etc/wulfram/server.env
+ExecStart=/usr/bin/python3 -u /opt/canadaverse/wulfram/current/server/main.py --config /etc/wulfram/server.toml --content-root /opt/canadaverse/wulfram/current/content
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=25
+CPUQuota=100%
+MemoryMax=512M
+TasksMax=96
+Nice=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
