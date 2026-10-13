@@ -146,6 +146,14 @@ class CombatSystem:
         if seconds <= 0.0 or self.server.physics is None:
             return []
         destroyed: dict[int, Destruction] = {}
+        # Cancel every attacker's shield before resolving any incoming shot,
+        # regardless of entity iteration order or whether it can afford to fire.
+        for entity in self.server.entities.get_all():
+            if entity.spawn_protection_remaining > 0:
+                attacking = any(entity.actions.get(action, 0) for action in
+                                (AUTOCANNON_ACTION, PULSE_ACTION, PIERCER_ACTION))
+                entity.spawn_protection_remaining = (0.0 if attacking else
+                    max(0.0, entity.spawn_protection_remaining - seconds))
         live_pulse_ids = {
             entity.net_id
             for entity in self.server.entities.get_all()

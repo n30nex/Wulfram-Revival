@@ -96,13 +96,34 @@ class BotHandshakeTests(unittest.TestCase):
             login.write_string("player")
             # An early/malicious readiness request cannot bypass world loading.
             transport.send_payload(b"\x39\x01")
+            bad_login = PacketWriter()
+            bad_login.write_byte(3)
+            bad_login.write_string("Human Player")
+            bad_login.write_string("wrong")
+            transport.send_payload(b"\x21" + bad_login.get_bytes())
+            self.assertEqual(transport.recv_payload(), b"\x22\x01\x06")
+            self.assertFalse(session.is_logged_in)
+            self.assertEqual(session.supplied_password, "")
+            # Retry the manual callsign/password flow on the same connection.
+            callsign = PacketWriter()
+            callsign.write_byte(1)
+            callsign.write_string("Human Player")
+            callsign.write_string("")
+            transport.send_payload(b"\x21" + callsign.get_bytes())
+            self.assertEqual(transport.recv_payload(), b"\x22\x01\x01")
             transport.send_payload(b"\x21" + login.get_bytes())
+            self.assertEqual(udp_client.recv(65535), b"\x13\x03")
+            # Drop the first HELLO verified. The server must retry without a
+            # fresh TCP connection or duplicate authentication side effects.
             self.assertEqual(udp_client.recv(65535), b"\x13\x03")
             root = PacketWriter()
             root.write_string("Hello There")
             dispatch_udp(b"\x08" + root.get_bytes() + b"\x03" + struct.pack(">IIII", 123, 1, 0, 0))
             replies = [udp_client.recv(65535)[0] for _ in range(4)]
             self.assertEqual(replies, [0x02, 0x03, 0x04, 0x04])
+            # Drop the first entire handshake burst, including stream setup.
+            retries = [udp_client.recv(65535)[0] for _ in range(4)]
+            self.assertEqual(retries, replies)
             dispatch_udp(b"\x02\x00" + struct.pack(">I", 124))
             self.assertTrue(session.d_handshake_ack_event.is_set())
 
@@ -119,6 +140,10 @@ class BotHandshakeTests(unittest.TestCase):
             transport.send_payload(b"\x39\x01")
             self.assertTrue(hooks.world_synced.wait(3))
             self.assertTrue(session.is_ready_for_updates)
+            dispatch_udp(b"\x03" + struct.pack(">IIII", 123, 1, 0, 0))
+            self.assertTrue(session.d_handshake_ack_event.is_set())
+            self.assertTrue(session.is_ready_for_updates)
+            self.assertEqual(udp_client.recv(65535)[:2], b"\x02\x00")
             session.team = 1
             free_pad = server.entities.create_entity(27, 1, (400.0, 0.0, 0.0))
             # The first pad is occupied by a bot. Exercise the real UDP route,

@@ -231,6 +231,7 @@ class BotManager:
             unit_type=LOADOUTS[bot.vehicle_loadout][0],
             team_id=bot.team,
             pos=spawn_pos,
+            register=False,
         )
         entity.rot = pad.rot
         entity.is_manned = True
@@ -254,6 +255,7 @@ class BotManager:
         from wulfram_server import application as app
 
         app._note_entity_spawn(bot, entity, "bot_respawn")
+        self.server.entities.register_entity(entity)
         app.broadcast(self.server, BirthNoticePacket(
             player_id=bot.player_id,
             entity_id=entity.net_id,

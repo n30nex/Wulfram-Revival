@@ -178,6 +178,56 @@ class NetworkBoundaryTests(unittest.TestCase):
         self.assertTrue(limit.allow("new", now=1))
         self.assertEqual(len(limit.windows), 1)
 
+    def test_game_events_survive_complete_udp_loss_in_tcp_order(self):
+        left, right = socket.socketpair()
+        session = app.ClientSession(self.server, left, ("127.0.0.1", 30000))
+        session.tcp_transport = TcpTransport(left, on_error=session.disconnect)
+        session.udp_context = app.UdpContext(Mock(), ("127.0.0.1", 40000), self.server, session)
+        receiver = TcpTransport(right)
+        try:
+            events = (b"\x18spawn", b"\x1ebirth", b"\x1fchat", b"\x1ddeath", b"\x15delete")
+            for payload in events:
+                session.udp_context.send(payload)
+            self.assertEqual([receiver.recv_payload(deadline=time.monotonic()+1) for _ in events], list(events))
+            session.udp_context.transport.send.assert_not_called()
+            session.udp_context.send(b"\x0emovement")
+            session.udp_context.transport.send.assert_called_once()
+        finally:
+            session.cleanup()
+            right.close()
+            session.tcp_transport.writer.join(1)
+        self.assertFalse(session.tcp_transport.writer.is_alive())
+
+    def test_slow_tcp_reader_has_a_bounded_queue_without_blocking_the_simulation(self):
+        left, right = socket.socketpair()
+        blocked, release = threading.Event(), threading.Event()
+        def stalled_write(*_):
+            blocked.set()
+            release.wait(2)
+        transport = None
+        try:
+            with patch.object(TcpTransport, "_write_payload", stalled_write):
+                transport = TcpTransport(left, on_error=Mock())
+                transport.send_payload(b"first")
+                self.assertTrue(blocked.wait(1))
+                for _ in range(128):
+                    transport.send_payload(b"event")
+                started = time.monotonic()
+                with self.assertRaises(ConnectionError):
+                    transport.send_payload(b"overflow")
+                self.assertLess(time.monotonic()-started, .1)
+                self.assertEqual(transport.outbox.qsize(), 128)
+                transport.close()
+                release.set()
+                transport.writer.join(1)
+                self.assertFalse(transport.writer.is_alive())
+        finally:
+            release.set()
+            if transport is not None:
+                transport.close()
+            left.close()
+            right.close()
+
     def test_authenticated_malformed_datagrams_do_not_escape_parser_errors(self):
         session = self.session()
         self.server._receive_datagram(self.key_packet(session.session_key), ("127.0.0.1", 40000))
