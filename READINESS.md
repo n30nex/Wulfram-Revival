@@ -4,6 +4,33 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Original mip decoding and sky increment, October 15, 2026
+
+The 0.1.5 candidate fixes a shared bitmap-decoder error: original mip levels
+are stored smallest first, while Godot expects largest first. The previous
+decoder placed small mip images into full-size textures and terrain masks.
+Complete original levels are now reordered without changing any pixels. This
+corrects model, terrain, sky and effect textures. The original composition
+fixture had the same incorrect storage assumption; corrected literal bitmap
+and mask fixtures now fail the old decoder and pass the fix.
+
+It also replaces the placeholder background with the map's original
+32 sky panels. Recovered original geometry and UV rotations are checked against
+an independent reference-executable capture at asymmetric world bounds. The
+original palettes, all stored mip levels and source archives remain unchanged.
+Crossroads uses its first declared theme, 2starset; Mayhem/Frontier use sunset.
+The importer preserves and hashes the map's startup settings, and the client
+reads only the sky directive without executing scripts. Missing data blocks
+deployment with an extraction instruction and clears the previous sky.
+
+All 121 Python tests pass. Native checks compare every panel, UV and texture ID;
+they cover inward winding, invalid settings/bounds, absent textures and cleanup.
+All 96 tiles from the three declared themes load and their complete RGBA mip
+hashes match an independent palette decoder. Existing wire, input and layout
+checks pass. Fog, lighting, alternate-theme cycling, decorative/remaining effect
+coverage and complete scene comparison remain open; this does not certify full
+visual parity or production readiness.
+
 ## Original sound and accepted combat feedback, October 15, 2026
 
 The published 0.1.4 preview adds original sound playback, volume/background mute controls,

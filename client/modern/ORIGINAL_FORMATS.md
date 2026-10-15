@@ -74,8 +74,62 @@ parity remain unqualified.
 The retail family selector may randomly choose another original variant when
 loading a map. This client currently retains the variant names recorded in
 `tagmap2`. Random variant/seed behavior remains a comparison item; no synthesized
-or recolored textures are used. Skies, decorative assets and effects also remain
-open fidelity work.
+or recolored textures are used. Decorative assets, remaining effects and full
+renderer comparison remain open fidelity work.
+
+## Stored mip order correction
+
+Kind-3 files store levels **smallest first**: 1x1, 2x2, 4x4, through the declared
+largest size. For a level of width S its palette-byte offset is
+`3 + (S*S - 1)/3`; a 128x128 level therefore starts at byte 5464. The earlier
+decoder incorrectly assumed Godot's largest-first order. Small mip images
+appeared as strips within the main image, and terrain masks mixed wrong-sized
+levels. The initial synthetic composition fixtures also encoded masks in the
+wrong order, so those checks did not expose the import error.
+
+The shared decoder now reorders complete levels before palette expansion and
+before terrain-mask composition. It retains every original pixel and mip; no
+new downsampling is performed. A literal 4x4/2x2/1x1 transparent bitmap fixture
+fails the old decoder and passes this correction. A separate un-mipped bitmap
+fixture protects that path. Mixed-mask fixtures use on-disk ascending levels
+and compare their result with an independently constructed descending chain.
+Fixed-view before/after sky, terrain and model captures expose the correction.
+
+## Original sky panels
+
+The sky builder at `0x44ba00` constructs 32 inward-facing quads: a 4x4 ceiling
+and four walls of four panels. Bounds are `(-width, -height)` to
+`(2*width, 2*height)`, with floor -10 and ceiling 3990 in original coordinates.
+The ceiling uses tile `29 + x - 4*y`; the walls use 8..5, 16..13, 12..9 and
+4..1 in order, with UV rotations 1, 3, 0 and 2. The UV routine at `0x44ae20`
+insets coordinates to 0.001/0.999. This is a world-sized box, not a sphere or
+an invented panorama.
+
+`sky-fixture.json` records all positions, texture IDs and UVs from bounded
+read-only emulation of these routines in the reference executable identified
+above, at an asymmetric 5600x4000 world size. Allocation/texture lookup were
+stubbed; geometry arithmetic and UV rotation ran unchanged. No Windows APIs,
+original executable code or original pixels are included in the fixture.
+The native check compares all 32 panels and tests inward winding, UV bindings,
+malformed settings, missing textures and stale-mesh cleanup.
+
+The map importer preserves each `start_script` byte-for-byte and hashes it.
+The client reads only its bounded `sky_names` data directive; it never executes
+the script. The current preview uses the first declared theme: Crossroads uses
+`2starset`, Mayhem/Frontier use `sunset`. Alternate selection/cycling, fog and
+lighting remain comparison items. All three declared sets, including Aurora,
+load their original 32 bitmap tiles and stored mips. Independent palette decode
+and native RGBA concatenation agree on SHA-256:
+
+| Theme | RGBA pixels including all stored mips, tile order 001..032 |
+| --- | --- |
+| 2starset | `ea69a4dadde5f8523ec648c720e415641cf8c7e2d9dcd378575d12945c804158` |
+| aurora | `18d6a6b624f210b211dc0de562358750ef99d8e4138e6dba3f8ce598f17a6f7e` |
+| sunset | `db265e399594ff8192f195292da1f535572fbbd654080e03a499590b9ca73579` |
+
+Unshaded materials preserve the palette colours and disable fog/shadows for the
+sky. The placeholder blue background is removed. These checks establish asset
+and layout preservation, not complete original-scene visual equivalence.
 
 ## Stripped cockpit/menu artwork
 

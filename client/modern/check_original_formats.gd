@@ -3,6 +3,13 @@ const Assets = preload("res://original_assets.gd")
 const Terrain = preload("res://terrain.gd")
 const TerrainTextures = preload("res://terrain_textures.gd")
 
+class BitmapAssets extends Assets:
+	var bytes := PackedByteArray([131, 2, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
+	func _init(palette: PackedByteArray) -> void:
+		_palette = palette
+	func _read(_archive: String, _name: String) -> PackedByteArray:
+		return bytes
+
 class FixtureAssets:
 	extends OriginalAssets
 	var fixture: Dictionary
@@ -43,6 +50,21 @@ func _hash(data: PackedByteArray) -> String:
 
 func _init() -> void:
 	var fixture: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://test-fixtures.json")).original_formats
+	var bitmap := BitmapAssets.new(fixture.palette.hex_decode())
+	var encoded := bitmap.bytes.duplicate()
+	assert(bitmap.texture("mips") != null)
+	assert(bitmap.bytes == encoded, "Import changed stored palette indices")
+	var decoded: PackedByteArray = bitmap.image_cache["base/mips"].get_data()
+	var expected := PackedByteArray()
+	# On disk: one 1x1 pixel, four 2x2 pixels, then sixteen 4x4 pixels.
+	for source in [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 1, 2, 3, 4, 0]:
+		expected.append_array(PackedByteArray([source, 255 - source, source * 3, 0 if source == 0 else 255]))
+	assert(decoded == expected, "Original stored mip order differs from Godot's base-first packing")
+	bitmap.bytes.resize(bitmap.bytes.size() - 1)
+	assert(bitmap.texture("truncated") == null)
+	bitmap.bytes = PackedByteArray([129, 2, 0, 1, 0, 0, 0, 0, 0, 0, 7])
+	assert(bitmap.texture("standalone") != null)
+	assert(bitmap.image_cache["base/standalone"].get_data() == PackedByteArray([0, 255, 0, 0, 7, 248, 21, 255]))
 	var assets := FixtureAssets.new(fixture)
 	var compositor := TerrainTextures.new()
 	var result := compositor.compose("+0template unknown001 14 0template canyon001 13 0template 4sand001 3", assets)

@@ -38,6 +38,9 @@ def main():
         maps.append((name, source, digest))
         if not source.with_name('tagmap2').is_file():
             raise SystemExit(f'Missing original terrain texture table for {name}.')
+        startup = source.with_name('start_script')
+        if not startup.is_file() or startup.stat().st_size > 65536:
+            raise SystemExit(f'Missing or oversized original sky settings for {name}.')
     args.output.mkdir(parents=True, exist_ok=True)
     manifest = {'schema': 1, 'maps': []}
     for name, source, digest in maps:
@@ -50,6 +53,13 @@ def main():
         tag_target = args.output/(name+'.tagmap2')
         shutil.copyfile(tags, tag_target)
         manifest['maps'][-1]['tagmap2_sha256'] = hashlib.sha256(tags.read_bytes()).hexdigest()
+        startup = source.with_name('start_script')
+        sky_target = args.output/(name+'.start_script')
+        sky_digest = hashlib.sha256(startup.read_bytes()).hexdigest()
+        if sky_target.exists() and hashlib.sha256(sky_target.read_bytes()).hexdigest() != sky_digest:
+            raise SystemExit(f'Refusing to replace different sky settings: {sky_target}')
+        shutil.copyfile(startup, sky_target)
+        manifest['maps'][-1]['start_script_sha256'] = sky_digest
     (args.output/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n', encoding='utf-8')
     print('MODERN_MAPS=PASS maps=3')
 

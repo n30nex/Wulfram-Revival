@@ -123,6 +123,21 @@ func stripmap(name: String) -> Texture2D:
 	texture_cache[key] = result
 	return result
 
+static func base_first_mips(data: PackedByteArray, width: int) -> PackedByteArray:
+	# Original kind-3 files store 1x1, 2x2, ... largest. Godot expects the
+	# full-size image first. Reorder whole stored levels, never their pixels.
+	var result := PackedByteArray()
+	var end := data.size()
+	var size := width
+	while size > 0:
+		var start := end - size * size
+		if start < 0:
+			return PackedByteArray()
+		result.append_array(data.slice(start, end))
+		end = start
+		size >>= 1
+	return result if end == 0 else PackedByteArray()
+
 func texture(name: String, archive := "base") -> Texture2D:
 	var key := archive + "/" + name.to_lower()
 	if texture_cache.has(key):
@@ -156,10 +171,11 @@ func texture(name: String, archive := "base") -> Texture2D:
 	if bytes.size() != start + count:
 		errors.append("Unexpected original bitmap length: " + key)
 		return null
+	var indices := base_first_mips(bytes.slice(start), width) if mipmaps else bytes.slice(start)
 	var pixels := PackedByteArray()
 	pixels.resize(count * 4)
 	for index in count:
-		var value := int(bytes[start + index])
+		var value := int(indices[index])
 		for channel in 3:
 			pixels[index * 4 + channel] = _palette[value * 3 + channel]
 		pixels[index * 4 + 3] = 0 if transparent and value == 0 else 255

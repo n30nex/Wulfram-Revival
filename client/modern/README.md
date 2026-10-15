@@ -48,7 +48,8 @@ python scripts/import-original-assets.py --client /path/to/preserved/client --ou
 ```
 
 Repeat `--content-root` when maps are stored in separate content roots. The
-importer copies the supported terrain grids and texture tables, records their checksums and
+importer copies the supported terrain grids, texture tables and original sky
+startup settings, records their checksums and
 does not commit original assets. The Actions artifact contains the executable,
 game pack, source identity and checks; the separately imported map manifest must
 also be included when assembling a playable distribution.
@@ -67,6 +68,9 @@ sides and an expanded centre. Radar and tactical-map imagery comes from the
 terrain's original stored mips. Terrain texture IDs use the original square-grid
 stride, independently of the vertex-height stride. Binary mask composition
 happens before filtering at every mip level; source bitmaps remain unchanged.
+Skies use the original 32 panels, world bounds, texture order and UV rotations.
+The first theme declared by each map is used; no startup-script commands are
+executed. Original fog/lighting and alternate-theme behavior remain unqualified.
 See [format evidence and tests](ORIGINAL_FORMATS.md).
 
 For development, import maps to `client/modern/content/maps` and the original
@@ -112,7 +116,7 @@ also accepts that older table when connecting to an older revival server.
 The maintainer requires the original models and textures to look exactly like
 the original. The loader preserves those assets, while full appearance parity
 is still under qualification. Terrain uses original bitmaps, family mask banks
-and stored mips; runtime random-variant selection, skies, decorative assets and
+and stored mips; runtime random-variant selection, sky fog/lighting, decorative assets and
 exact lighting/effect/UI presentation still need comparison. Original sound and
 accepted combat feedback are implemented; physical sound/mix approval,
 physical aiming/handling approval, complete weapon/equipment interfaces,
