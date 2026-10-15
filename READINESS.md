@@ -6,7 +6,7 @@ out of scope for the first release; the Pi server runs on Linux.
 
 ## Native aiming and combat increment, October 15, 2026
 
-The 0.1.1 development candidate adds mouse steering/tilt using the preserved
+The published 0.1.1 development preview adds mouse steering/tilt using the preserved
 keymap coefficients, full vehicle/camera rotation, pulse/piercer/repair controls,
 weapon-charge display and focus/menu input release. Original models and texture
 archives are unchanged. The new per-session action table preserves fine input;
@@ -30,10 +30,34 @@ Bounded local evidence:
   activation failed during the attempted physical mouse check. These results
   therefore do not qualify physical mouse capture, desktop DPI or 4K hardware.
 
-The prior published preview record below remains the release reference until
-the exact Actions candidate is packaged, downloaded and checked. This increment
-does not close the original-art parity, audio, prediction, equipment UI or human
-approval gates and must not replace the default preserved-client download.
+[PR #35](https://github.com/n30nex/Wulfram-Revival/pull/35) is merged as `f8c042d`.
+The exact client/server source is `d5cefcce0ef9b463f43ca7b1ce3550ba8285c2c0`.
+All Windows, x64 Linux and ARM64 checks passed. The Windows client comes from
+[Actions 38729091171](https://github.com/n30nex/Wulfram-Revival/actions/runs/38729091171),
+with a clean-source build manifest.
+
+- [Optional native preview ZIP](https://canadaverse.org/downloads/wulfram/Wulfram-Revival-Modern-0.1.1-dev-d5cefcc.zip):
+  50,079,687 bytes; SHA-256 `bf92cfd4c82cb0da803d95b4d24e55f722aaab9b9b97d2b011f0de71944a534a`.
+  Full public download returned HTTP 200 and matched at 11:50 UTC.
+- EXE SHA-256 `d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562`;
+  PCK SHA-256 `4f9a6a8545a27b67537eefa391f28a34c21fb9307fe7f8bce31ac40954bbfcc5`.
+- The exact exported build rendered Crossroads, deployed, moved 87.46 world
+  units and received 249 snapshots with zero malformed packets. Its capture
+  confirmed the live server negotiated the precise action table.
+- Pi server `0.4.0-alpha2.7` runs that source with the exact ARM64 artifact from
+  [Actions 38729091089](https://github.com/n30nex/Wulfram-Revival/actions/runs/38729091089).
+  Native API 14, native binary and content identity are unchanged from alpha2.6.
+  At 11:48 UTC it was ready with 64 bots, 16 human places and no automatic restarts.
+- An external-host legacy journey passed public DNS/TCP/UDP, full-health spawn,
+  movement, team switch, Scout deployment and clean disconnect in 19.4 seconds.
+- Server rollback is `/opt/canadaverse/wulfram/backups/20261015-alpha27-d5cefcc/rollback.py`;
+  its checked target is the sealed alpha2.6 release. Configuration, existing
+  player page and default download stayed unchanged. Preview rollback removes
+  only the new versioned ZIP, its checksum and `modern-preview-d5cefcc.json`.
+
+This increment does not close original-art parity, audio, prediction, equipment
+UI or human approval gates. The preview manifest has `production_approved: false`;
+the preserved client remains the default download.
 
 ## Native Windows development preview, October 15, 2026
 
