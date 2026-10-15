@@ -11,9 +11,18 @@ Windows client to modern systems.
 
 The public Pi 5 server runs 64 bots with 16 additional human places. The first
 stable release will focus on dependable matches, coordinated bots, clear
-onboarding and reliable graphics. A replacement client follows in stages,
-retaining the classic sci-fi identity and improving the HUD, assets and lighting.
+onboarding and reliable graphics. The native replacement client is now in active
+development alongside server/bot qualification. Original models and textures must
+retain their original appearance; modernize the renderer and HUD layout without
+redesigning those assets.
 Windows comes first; a native Linux client is deferred.
+
+An optional **[modern Windows development preview](https://canadaverse.org/downloads/wulfram/Wulfram-Revival-Modern-0.1.0-dev-5fe9b11.zip)**
+is available ([checksum](https://canadaverse.org/downloads/wulfram/Wulfram-Revival-Modern-0.1.0-dev-5fe9b11.zip.sha256),
+[scope and controls](client/modern/README.md)). It connects to the existing public
+server and imports the original graphics archives. Exact visual parity, mouse
+aiming, audio and complete weapon/equipment interfaces remain unfinished. The
+preserved-client alpha remains the main player-page download.
 
 The current release is an **alpha**. Release gates include automated checks and
 approval from the maintainer plus returning and new players. We are working
