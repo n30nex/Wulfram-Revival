@@ -6,7 +6,7 @@ out of scope for the first release; the Pi server runs on Linux.
 
 ## Original sound and accepted combat feedback, October 15, 2026
 
-The 0.1.4 candidate adds original sound playback, volume/background mute controls,
+The published 0.1.4 preview adds original sound playback, volume/background mute controls,
 bounded ambient/flight/repair loops, and original gun-flash/impact/explosion frames.
 Opt-in server events identify accepted shots, actual ray endpoints and projectile
 kinds. Empty fuel/cooldown do not generate shots; repeated events are deduplicated.
@@ -33,6 +33,41 @@ with a peak of 12, and completed 234 snapshots without malformed data. Connectio
 UDP peers and the test server were cleaned up. This is not Pi capacity or physical
 input/audio approval. Full client systems, lifecycle/visual parity and human gates
 remain open. See [protocol and audio evidence](client/modern/COMBAT_AUDIO.md).
+
+[PR #41](https://github.com/n30nex/Wulfram-Revival/pull/41) is merged as `11f3826`.
+Exact source `0840133e3807617c085112df54763c703b95b32c` passed all ten push/PR
+checks. The Windows export comes from
+[Actions 38769476164](https://github.com/n30nex/Wulfram-Revival/actions/runs/38769476164).
+
+- [Optional Windows preview ZIP](https://canadaverse.org/downloads/wulfram/Wulfram-Revival-Modern-0.1.4-dev-0840133.zip):
+  52,922,881 bytes; SHA-256 `b98710cb3645f7319db4e8c3f11641a6ca522d678ac91c2c492110430c61c733`.
+  The complete public HTTP 200 download, checksum and manifest matched at
+  16:50 UTC on October 15.
+- EXE SHA-256 `d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562`;
+  PCK SHA-256 `b5078098a9b4ebd31e1ceca5c3d67e395f6044fb045544c4315d12a0eb60337d`.
+  The package seals all copied files, including 164 original-media entries.
+- The exact exported client rendered a live Crossroads match, moved 89.22 world
+  units and received 95 snapshots without malformed packets. Nine accepted shot
+  events and 18 feedback events arrived; 23 original sound voices were requested.
+  The bounded quiet test disconnected and exited. This is not a listening test.
+- The Pi now runs **0.4.0-alpha2.8** from the same source and the exact ARM64
+  artifact from [Actions 38769476257](https://github.com/n30nex/Wulfram-Revival/actions/runs/38769476257).
+  Native binding SHA-256 remains `584420a49559e1e7365bf27759d5a504aca38c338cb3b0b19100b98b540e0cd0`;
+  content identity remains `edd715d34b3d536828e5b0351fe88a3802ea3f485baaafe92964e7a46a50ac6f`.
+  At 16:49 UTC it was ready with 64 bots, 16 human places, PID 3097399 and
+  zero automatic restarts. Native physics and gameplay tuning did not change.
+- An independent Internet host passed the legacy login, UDP handshake, team,
+  full-health Tank deployment/movement, team switch, actual Scout deployment
+  and clean disconnect journey in 19.25 seconds.
+- Verified server rollback is
+  `/opt/canadaverse/wulfram/backups/20261015-alpha28-0840133/rollback.py`, restoring
+  sealed alpha2.7. The unit and service configuration are unchanged. Preview
+  publication adds only its ZIP, checksum and `modern-preview-0840133.json`;
+  earlier versions and the preserved-client default remain available.
+
+The manifest retains `production_approved: false`. Full visual parity, prediction,
+equipment/UI systems, loss/reordering/lifecycle coverage and physical/human approval
+remain open. Original artwork is unchanged; renderer equivalence is not yet certified.
 
 ## Original model exterior correction, October 15, 2026
 
