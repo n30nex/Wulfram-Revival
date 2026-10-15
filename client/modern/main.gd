@@ -5,6 +5,7 @@ const Radar = preload("res://radar.gd")
 const Assets = preload("res://original_assets.gd")
 const Terrain = preload("res://terrain.gd")
 const VehicleInput = preload("res://vehicle_input.gd")
+const Cockpit = preload("res://cockpit.gd")
 const SCALE := 0.1
 var network := Network.new()
 var camera := Camera3D.new()
@@ -31,6 +32,8 @@ var reticle := Label.new()
 var vehicle_input := VehicleInput.new()
 var server_port := 2627
 var map_control: Control
+var radar_control: Control
+var cockpit_frame := Cockpit.new()
 var terrain_loaded := false
 var selected_pad := 0
 var world_size := Vector2(5600, 5600)
@@ -83,6 +86,8 @@ func _ready() -> void:
 		assets_loaded = assets.open_directory(asset_path)
 	if not assets_loaded:
 		status_label.text = "Original graphics are required. Import the preserved assets before deployment."
+	else:
+		cockpit_frame.artwork = assets.stripmap("shockforce_cockpit")
 	network.status_changed.connect(func(message: String): status_label.text = message)
 	network.world_changed.connect(_load_map)
 	network.deployed.connect(_on_deployed)
@@ -167,7 +172,7 @@ func _build_ui() -> void:
 	var center := CenterContainer.new()
 	ui.add_child(center)
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	center.offset_bottom = -190
+	center.offset_bottom = -Cockpit.HEIGHT - 20
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var screens := VBoxContainer.new()
 	center.add_child(screens)
@@ -202,20 +207,23 @@ func _build_ui() -> void:
 	deploy_button = _button(deployment, "DEPLOY", _request_spawn)
 	_button(deployment, "RESUME / F1", func(): _set_menu(false))
 	_button(deployment, "DISCONNECT", func(): network.disconnect_game(); status_label.text = "Disconnected.")
-	var footer := HBoxContainer.new()
+	var footer := cockpit_frame
 	ui.add_child(footer)
 	footer.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	footer.offset_left = 20
-	footer.offset_right = -20
-	footer.offset_top = -182
-	footer.offset_bottom = -18
-	footer.add_theme_constant_override("separation", 12)
+	footer.offset_top = -Cockpit.HEIGHT
 	var radar := Radar.new()
 	radar.network = network
 	radar.local_view = true
+	radar.classic = true
+	radar_control = radar
 	footer.add_child(radar)
-	var cockpit := _panel(footer, Vector2(0, 164))
-	cockpit.get_parent().size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	footer.radar = radar
+	var cockpit := _panel(footer, Vector2.ZERO)
+	var cockpit_style := StyleBoxFlat.new()
+	cockpit_style.bg_color = Color(0.015, 0.015, 0.02, 0.97)
+	cockpit_style.set_content_margin_all(10)
+	cockpit.get_parent().add_theme_stylebox_override("panel", cockpit_style)
+	footer.instruments = cockpit.get_parent()
 	var meters := HBoxContainer.new()
 	cockpit.add_child(meters)
 	for pair in [["ARMOUR", health_bar], ["FUEL", fuel_bar]]:
@@ -236,6 +244,8 @@ func _build_ui() -> void:
 	charge_box.add_child(charge_bar)
 	status_label.text = "Connect to join the public battlefield."
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status_label.max_lines_visible = 2
+	status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_label.add_theme_font_size_override("font_size", 15)
 	cockpit.add_child(status_label)
@@ -243,9 +253,10 @@ func _build_ui() -> void:
 	cockpit.add_child(telemetry_label)
 	map_control = Radar.new()
 	map_control.network = network
-	map_control.custom_minimum_size.x = 236
+	map_control.classic = true
 	map_control.pad_selected.connect(func(id: int): selected_pad = id; _refresh_pads())
 	footer.add_child(map_control)
+	footer.tactical_map = map_control
 	reticle.text = "+"
 	reticle.add_theme_font_size_override("font_size", 28)
 	ui.add_child(reticle)
@@ -419,6 +430,8 @@ func _sync_visuals(delta: float) -> void:
 func _load_map(name_value: String) -> void:
 	terrain_loaded = false
 	terrain.mesh = null
+	map_control.overview = null
+	radar_control.overview = null
 	var path := "res://content/maps/" + name_value + ".land"
 	if not FileAccess.file_exists(path):
 		path = OS.get_executable_path().get_base_dir().path_join("maps/" + name_value + ".land")
@@ -430,6 +443,9 @@ func _load_map(name_value: String) -> void:
 		return
 	world_size = terrain.world_size
 	map_control.world_size = world_size
+	radar_control.world_size = world_size
+	map_control.overview = terrain.overview
+	radar_control.overview = terrain.overview
 	terrain_loaded = true
 	camera.position = Vector3(world_size.x * SCALE * 0.5, 160, -world_size.y * SCALE * 0.25)
 	camera.look_at(Vector3(world_size.x * SCALE * 0.5, 0, -world_size.y * SCALE * 0.5))
@@ -466,6 +482,7 @@ func _ui_check() -> void:
 		assert(connection_panel.get_global_rect().size.x <= ui.size.x)
 		assert(map_control.get_global_rect().end.x <= ui.size.x)
 		assert(host_input.get_global_rect().intersects(connection_panel.get_global_rect()))
+		assert(cockpit_frame.instruments.get_global_rect().end.y <= ui.size.y - 16)
 	print("MODERN_UI_LAYOUT=PASS")
 	get_tree().quit()
 
@@ -491,6 +508,9 @@ func _capture() -> void:
 	record["original_models"] = assets.model_cache.size()
 	record["original_textures"] = assets.texture_cache.size()
 	record["asset_errors"] = assets.errors
+	record["terrain_build_msec"] = terrain.build_msec
+	record["terrain_texture_bytes"] = terrain.texture_bytes
+	record["cockpit_instruments"] = cockpit_frame.instruments.get_global_rect()
 	record["movement_packets"] = network.movement_packets
 	record["firing_packets"] = network.firing_packets
 	record["position"] = network.entities.get(network.vehicle_id, {}).get("pos", Vector3.ZERO)

@@ -49,7 +49,7 @@ func open_directory(path: String) -> bool:
 	if _palette.size() != 768:
 		errors.append("Missing original palette0.")
 		return false
-	for name in ["shapes", "base", "landscape", "skies", "res_640x480"]:
+	for name in ["shapes", "base", "landscape", "skies", "res_640x480", "stripmaps2"]:
 		var archive := ZIPReader.new()
 		if archive.open(path.path_join(name + ".zip")) != OK:
 			errors.append("Missing original " + name + ".zip")
@@ -67,6 +67,53 @@ func _read(archive: String, name: String) -> PackedByteArray:
 		errors.append("Missing original asset: " + archive + "/" + name)
 		return PackedByteArray()
 	return _archives[archive].read_file(entry)
+
+func stripmap(name: String) -> Texture2D:
+	var key := "stripmaps2/" + name.to_lower()
+	if texture_cache.has(key):
+		return texture_cache[key]
+	var bytes := _read("stripmaps2", name)
+	if bytes.size() < 12:
+		return null
+	var strips := bytes.decode_u32(0)
+	var width := bytes.decode_u16(4)
+	var height := bytes.decode_u16(6)
+	var count := bytes.decode_u32(8)
+	if strips > 65536 or count > 16777216 or bytes.size() != 12 + count + strips * 6:
+		errors.append("Invalid original stripmap: " + name)
+		return null
+	var bounds := Vector2i.ZERO
+	var total := 0
+	for index in strips:
+		var at := 12 + count + index * 6
+		bounds.x = maxi(bounds.x, bytes.decode_u16(at) + bytes.decode_u16(at + 4))
+		bounds.y = maxi(bounds.y, bytes.decode_u16(at + 2) + 1)
+		total += bytes.decode_u16(at + 4)
+	width = bounds.x if width == 0 else width
+	height = bounds.y if height == 0 else height
+	if total != count or width < bounds.x or height < bounds.y or width < 1 or height < 1 or width > 4096 or height > 4096:
+		errors.append("Original stripmap bounds mismatch: " + name)
+		return null
+	var pixels := PackedByteArray()
+	pixels.resize(width * height * 4)
+	var source := 12
+	for index in strips:
+		var at := 12 + count + index * 6
+		var x := bytes.decode_u16(at)
+		var y := bytes.decode_u16(at + 2)
+		var length := bytes.decode_u16(at + 4)
+		for column in length:
+			var value: int = bytes[source]
+			source += 1
+			var target := ((y * width) + x + column) * 4
+			for channel in 3:
+				pixels[target + channel] = _palette[value * 3 + channel]
+			pixels[target + 3] = 255
+	var image := Image.create_from_data(width, height, false, Image.FORMAT_RGBA8, pixels)
+	var result := ImageTexture.create_from_image(image)
+	image_cache[key] = image
+	texture_cache[key] = result
+	return result
 
 func texture(name: String, archive := "base") -> Texture2D:
 	var key := archive + "/" + name.to_lower()

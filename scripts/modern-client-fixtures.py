@@ -3,6 +3,8 @@ import contextlib
 import io
 import json
 import sys
+import hashlib
+import struct
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
@@ -36,6 +38,44 @@ def control_fixture(precise=False):
     return controls.get_bytes().hex()
 
 
+def original_format_fixture():
+    # Independent byte-level reference for the retail palette/mask operations.
+    images = {}
+    masks = {}
+    for name, seed in (('unknown001', 11), ('canyon001', 51), ('4sand001', 101)):
+        pixels = bytearray()
+        for level in range(8):
+            for index in range((128 >> level)**2):
+                v = (seed + 17*level + index % 13) % 256
+                pixels.extend((v, 255-v, (v*3) % 256, 255))
+        images[name] = bytes(pixels)
+    for suffix in (1, 7):
+        mask = bytes(255 if (index+level+suffix) % 3 == 0 else 0
+                     for level in range(8) for index in range((128 >> level)**2))
+        masks[f'2template{suffix:03}'] = b'\x03\x07\x00' + mask
+    composed = bytearray(images['canyon001'])
+    for name, mask_name in (('unknown001', '2template001'), ('4sand001', '2template007')):
+        for index, mask in enumerate(masks[mask_name][3:]):
+            if mask:
+                composed[index*4:index*4+4] = images[name][index*4:index*4+4]
+    palette = bytes(channel for value in range(256) for channel in (value, 255-value, (value*3) % 256))
+    runs = [(1, 0, 2), (0, 1, 3), (3, 2, 1)]
+    strip = struct.pack('<IHHI', 3, 4, 3, 6) + bytes(range(1, 7))
+    strip += b''.join(struct.pack('<HHH', *run) for run in runs)
+    decoded = bytearray(4*3*4)
+    source = 1
+    for x, y, length in runs:
+        for column in range(length):
+            at = (y*4+x+column)*4
+            decoded[at:at+4] = palette[source*3:source*3+3] + b'\xff'
+            source += 1
+    return {'images': {k: v.hex() for k, v in images.items()},
+            'masks': {k: v.hex() for k, v in masks.items()},
+            'composed_sha256': hashlib.sha256(composed).hexdigest(),
+            'palette': palette.hex(), 'strip': strip.hex(),
+            'strip_sha256': hashlib.sha256(decoded).hexdigest()}
+
+
 def fixtures():
     snapshot = UpdateArrayPacket(100, is_view_update=True)
     snapshot.set_local_stats(.75, .5, weapon_table_id=1)
@@ -54,6 +94,7 @@ def fixtures():
     older_remote.add_entity(GameEntity(100, 0, 1, pos=(900, 900, 900)), force_spawn=True, forced_mask=3)
     older_remote.add_entity(GameEntity(200, 0, 1, pos=(30, 40, 50)), force_spawn=True, forced_mask=3)
     return {
+        'original_formats': original_format_fixture(),
         'snapshot': (b'\x0f' + snapshot.get_bytes()).hex(),
         'tank': TankPacket(42, 99, TankPacketConfig(), pos=(10.5, -20.25, 6.0),
                            rot=(0, 0, 1.5), health=.8, energy=.6).serialize().hex(),

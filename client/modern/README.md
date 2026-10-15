@@ -55,6 +55,12 @@ their hashes. The native loader reads the original visual meshes (not collision
 substitutes), UVs, attachment points, palette pixels and stored mip levels.
 No replacement or AI-generated models/textures are used. All 39 visual models
 and their 175 referenced textures pass the local archive check.
+The original cockpit stripmap supplies the frame, with proportional radar/map
+sides and an expanded centre. Radar and tactical-map imagery comes from the
+terrain's original stored mips. Terrain texture IDs use the original square-grid
+stride, independently of the vertex-height stride. Binary mask composition
+happens before filtering at every mip level; source bitmaps remain unchanged.
+See [format evidence and tests](ORIGINAL_FORMATS.md).
 
 For development, import maps to `client/modern/content/maps` and the original
 archives to `client/modern/content/original`, then open
@@ -96,9 +102,9 @@ also accepts that older table when connecting to an older revival server.
 
 The maintainer requires the original models and textures to look exactly like
 the original. The loader preserves those assets, while full appearance parity
-is still under qualification. Terrain uses original tile bitmaps and the original
-bank-1 dither masks; the old renderer's variant/priority selection and exact
-lighting/effect/UI presentation still need side-by-side comparison. Sound,
+is still under qualification. Terrain uses original bitmaps, family mask banks
+and stored mips; runtime random-variant selection, skies, decorative assets and
+exact lighting/effect/UI presentation still need comparison. Sound,
 physical aiming/handling approval, complete weapon/equipment interfaces,
 prediction/reconciliation, full loss/reordering/map/death tests, accessibility,
 GPU/DPI coverage and human playtests are not qualified. No claim of production

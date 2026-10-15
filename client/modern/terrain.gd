@@ -2,12 +2,20 @@ extends MeshInstance3D
 ## Original land heights and tagmap2 references, using the preserved bitmap masks.
 const ShaderSource = preload("res://terrain.gdshader")
 const Assets = preload("res://original_assets.gd")
+const TerrainTextures = preload("res://terrain_textures.gd")
+const PAGE_LAYERS := 256
 var world_size := Vector2.ZERO
 var error := ""
+var build_msec := 0
+var texture_bytes := 0
+var overview: Texture2D
 
 func build(land_path: String, assets: Assets) -> bool:
 	mesh = null
 	error = ""
+	overview = null
+	texture_bytes = 0
+	var started := Time.get_ticks_msec()
 	var tags_path := land_path.trim_suffix(".land") + ".tagmap2"
 	if not FileAccess.file_exists(tags_path):
 		return _fail("Original terrain texture table is missing.")
@@ -24,58 +32,34 @@ func build(land_path: String, assets: Assets) -> bool:
 		return _fail("Unsupported terrain dimensions.")
 	world_size = Vector2(float(extents[0]), float(extents[1]))
 	var records: Array = []
-	var indices: Dictionary = {}
+	var compositor := TerrainTextures.new()
+	var materials: Array[Material] = []
 	var images: Array[Image] = []
 	for recipe in FileAccess.get_file_as_string(tags_path).split("\n", false):
-		var tokens := recipe.strip_edges().trim_prefix("+").split(" ", false)
-		var layers := Color(0, 0, 0, 0)
-		var masks := Color(0, 0, 0, 0)
-		var special: StandardMaterial3D = null
-		var count := tokens.size() / 3 if recipe.begins_with("+") else 1
-		if count < 1 or count > 4 or (recipe.begins_with("+") and tokens.size() % 3 != 0):
-			return _fail("Unsupported terrain composition.")
-		for slot in int(count):
-			var name: String = tokens[slot * 3 + 1] if recipe.begins_with("+") else tokens[0]
-			var key := name.to_lower()
-			if not indices.has(key):
-				var archive := "landscape" if assets._names.landscape.has(key) else "base" if assets._names.base.has(key) else "res_640x480"
-				if assets.texture(name, archive) == null:
-					return _fail("Missing original terrain texture: " + name)
-				var image: Image = assets.image_cache[archive + "/" + key]
-				if image.get_size() != Vector2i(128, 128) or not image.has_mipmaps():
-					if count != 1:
-						return _fail("Unsupported mixed bitmap dimensions: " + name)
-					# Preserve a non-square/non-mipped original at its own size.
-					# Mayhem references a UI bitmap as a standalone terrain tile.
-					special = assets.material(name, archive)
-					break
-				indices[key] = images.size()
-				images.append(image)
-			layers[slot] = indices[key]
-			masks[slot] = 15 ^ int(tokens[slot * 3 + 2]) if recipe.begins_with("+") else 15
-			if masks[slot] < 0 or masks[slot] > 15:
-				return _fail("Invalid original terrain mask.")
-		records.append([layers, masks, special])
-	var tiles := Texture2DArray.new()
-	if images.is_empty() or tiles.create_from_images(images) != OK:
-		return _fail("Could not load the original terrain textures.")
-	var mask_images: Array[Image] = []
-	# Retail table at 0x577008 maps file suffixes to coverage bits.
-	const PERMUTATION := [0, 1, 3, 2, 5, 10, 4, 12, 8, 14, 13, 11, 7, 9, 6, 15]
-	for mask in 16:
-		var pixels := PackedByteArray()
-		if mask in [0, 15]:
-			pixels.resize(21845)
-			pixels.fill(255 if mask == 15 else 0)
-		else:
-			var bytes := assets._read("base", "1template%03d" % PERMUTATION.find(mask))
-			if bytes.size() != 21848:
-				return _fail("Missing original terrain blend mask.")
-			pixels = bytes.slice(3)
-		mask_images.append(Image.create_from_data(128, 128, true, Image.FORMAT_R8, pixels))
-	var mask_texture := Texture2DArray.new()
-	if mask_texture.create_from_images(mask_images) != OK:
-		return _fail("Could not load terrain blend masks.")
+		var result := compositor.compose(recipe, assets)
+		if result.is_empty():
+			return _fail(compositor.error)
+		if result.has("special"):
+			var thumbnail: Image = result.special.albedo_texture.get_image().duplicate()
+			thumbnail.resize(4, 4, Image.INTERPOLATE_BILINEAR)
+			records.append([-1, 0, result.special, thumbnail])
+			continue
+		var pixels: PackedByteArray = result.image.get_data()
+		var thumbnail := Image.create_from_data(4, 4, false, Image.FORMAT_RGBA8, pixels.slice(pixels.size() - 84, pixels.size() - 20))
+		records.append([materials.size(), images.size(), null, thumbnail])
+		images.append(result.image)
+		texture_bytes += result.image.get_data_size()
+		if images.size() == PAGE_LAYERS:
+			var page := _page_material(images)
+			if page == null:
+				return false
+			materials.append(page)
+			images.clear()
+	if not images.is_empty():
+		var page := _page_material(images)
+		if page == null:
+			return false
+		materials.append(page)
 	var vertices := PackedVector3Array()
 	var tags := PackedInt32Array()
 	for y in rows:
@@ -85,45 +69,52 @@ func build(land_path: String, assets: Assets) -> bool:
 				return _fail("Invalid terrain cell.")
 			tags.append(int(point[0]))
 			vertices.append(Vector3(float(x) * world_size.x / (columns - 1), float(point[1]), -float(y) * world_size.y / (rows - 1)) * 0.1)
-	var surface := SurfaceTool.new()
-	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	surface.set_custom_format(0, SurfaceTool.CUSTOM_RGBA_FLOAT)
-	surface.set_custom_format(1, SurfaceTool.CUSTOM_RGBA_FLOAT)
-	var special_surfaces: Dictionary = {}
+	var surfaces: Dictionary = {}
+	var map_image := Image.create_empty((columns - 1) * 4, (rows - 1) * 4, false, Image.FORMAT_RGBA8)
 	var uv := [Vector2.ZERO, Vector2.RIGHT, Vector2.DOWN, Vector2.ONE]
 	for y in rows - 1:
 		for x in columns - 1:
 			var cell := y * columns + x
-			if tags[cell] < 0 or tags[cell] >= records.size():
+			# LAND interleaves two independent flattened streams: (W*H) vertex
+			# heights and the first ((W-1)*(H-1)) quad texture IDs. Texture rows
+			# therefore have W-1 entries, despite sharing lines with heights.
+			var tag: int = tags[y * (columns - 1) + x]
+			if tag < 0 or tag >= records.size():
 				return _fail("Terrain references an unknown original texture.")
-			var record: Array = records[tags[cell]]
-			var target: SurfaceTool = surface
-			if record[2] != null:
-				if not special_surfaces.has(record[2]):
-					var extra := SurfaceTool.new()
-					extra.begin(Mesh.PRIMITIVE_TRIANGLES)
-					extra.set_material(record[2])
-					special_surfaces[record[2]] = extra
-				target = special_surfaces[record[2]]
+			var record: Array = records[tag]
+			map_image.blit_rect(record[3], Rect2i(0, 0, 4, 4), Vector2i(x * 4, y * 4))
+			var material: Material = record[2] if record[2] != null else materials[record[0]]
+			if not surfaces.has(material):
+				var surface := SurfaceTool.new()
+				surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+				surface.set_custom_format(0, SurfaceTool.CUSTOM_RGBA_FLOAT)
+				surface.set_material(material)
+				surfaces[material] = surface
+			var target: SurfaceTool = surfaces[material]
 			var corners := [cell, cell + 1, cell + columns, cell + columns + 1]
 			# Same alternating diagonal as the authoritative original terrain.
 			var triangles := [0, 2, 3, 1, 0, 3] if (((~x) ^ y) & 1) != 0 else [0, 2, 1, 3, 1, 2]
 			for corner in triangles:
 				target.set_uv(uv[corner])
-				if record[2] == null:
-					target.set_custom(0, record[0])
-					target.set_custom(1, record[1])
+				target.set_custom(0, Color(record[1], 0, 0, 0))
 				target.set_normal(Vector3.UP)
 				target.add_vertex(vertices[corners[corner]])
-	mesh = surface.commit()
-	var material := ShaderMaterial.new()
-	material.shader = ShaderSource
-	material.set_shader_parameter("original_tiles", tiles)
-	material.set_shader_parameter("original_masks", mask_texture)
-	mesh.surface_set_material(0, material)
-	for extra in special_surfaces.values():
-		extra.commit(mesh)
+	mesh = ArrayMesh.new()
+	for surface in surfaces.values():
+		surface.commit(mesh)
+	overview = ImageTexture.create_from_image(map_image)
+	build_msec = Time.get_ticks_msec() - started
 	return true
+
+func _page_material(images: Array[Image]) -> ShaderMaterial:
+	var tiles := Texture2DArray.new()
+	if tiles.create_from_images(images) != OK:
+		_fail("Could not upload original terrain textures.")
+		return null
+	var result := ShaderMaterial.new()
+	result.shader = ShaderSource
+	result.set_shader_parameter("original_tiles", tiles)
+	return result
 
 func _fail(message: String) -> bool:
 	error = message

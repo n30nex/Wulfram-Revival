@@ -4,6 +4,37 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Original terrain and cockpit increment, October 15, 2026
+
+The 0.1.2 development candidate corrects two terrain format errors: texture IDs
+belong to a (W-1)*(H-1) square grid even though the file interleaves them with W*H
+vertex heights, and binary texture masks must be applied before filtering each
+stored mip. The native physics height grid is unchanged. Fixed-camera before/
+after captures now show continuous roads and metal structures in their original
+positions. Family-specific mask banks replace the single-bank approximation.
+
+The cockpit uses the preserved `shockforce_cockpit` artwork, decoded directly
+from `stripmaps2.zip`. Radar and tactical map now show terrain imagery; the local
+radar rotates with vehicle heading. The frame retains its side proportions while
+its centre expands for widescreen, and long status text stays inside it.
+
+Validation: independent byte fixtures cover all eight composition mips, source
+pixel immutability, palette/strip transparency, inferred bounds and malformed
+strips. A non-square synthetic LAND checks texture and height strides separately.
+All 39 core models, 175 model textures, ten stripmaps and three terrain loaders
+pass. The decoded cockpit matches an independent RGBA SHA-256. GPU GUI-event
+checks pass login/team/map clicks and status containment at five requested sizes
+through 3840x2160. These are not physical mouse/DPI or full hardware approval.
+
+Crossroads builds in about 3.3 seconds locally and uses 369,355,260 uncompressed
+RGBA texture bytes, in pages of 256 layers. The fragment shader samples one
+completed texture. [Format evidence](client/modern/ORIGINAL_FORMATS.md) records
+the original executable identity, reader/compositor behavior and limits. Runtime
+variant randomness, skies, decorative assets, effects and complete UI parity
+remain open; original files are unchanged. This increment requires exact export
+and public-package validation before publication, and does not replace the
+default preserved-client download.
+
 ## Native aiming and combat increment, October 15, 2026
 
 The published 0.1.1 development preview adds mouse steering/tilt using the preserved

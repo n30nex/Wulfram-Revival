@@ -136,8 +136,11 @@ actual projectiles with 64 bots plus a simultaneous legacy connection. GPU GUI
 event checks cover login/team/map targets from 800x600 through a requested 4K
 window size; physical mouse/DPI and human handling approval remain open.
 The native asset loader reads the original visual meshes and texture archives;
-terrain composition, original effect/UI coverage and visual comparison remain
-required. Approximate development geometry is not acceptable final content.
+the original terrain square indexing, binary mip composition, cockpit frame
+and terrain-backed radar/map are now implemented and regression checked.
+Sky/decorative/effect/UI coverage, runtime texture-variant behavior and full
+visual comparison remain required. Approximate development geometry is not
+acceptable final content.
 Compare handling and combat with the preserved client and retain the recognizable
 cockpit/radar/map relationship. Qualify the transition before making the
 replacement the default download. A passing connection test does not close M4.
