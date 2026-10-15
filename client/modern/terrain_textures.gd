@@ -33,7 +33,7 @@ func _mask(bank: int, coverage: int, assets: Assets) -> Array:
 		if raw.size() != 21848 or raw[0] != 3 or raw.decode_u16(1) != 7:
 			error = "Invalid original terrain mask: " + key
 			return []
-		source = raw.slice(3)
+		source = Assets.base_first_mips(raw.slice(3), 128)
 	var result: Array[Image] = []
 	var offset := 0
 	for level in 8:

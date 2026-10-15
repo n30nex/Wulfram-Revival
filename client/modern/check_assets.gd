@@ -1,6 +1,7 @@
 extends SceneTree
 const Assets = preload("res://original_assets.gd")
 const Terrain = preload("res://terrain.gd")
+const OriginalSky = preload("res://original_sky.gd")
 
 func _init() -> void:
 	var assets := Assets.new()
@@ -43,4 +44,20 @@ func _init() -> void:
 		if not passed:
 			assets.errors.append(terrain.error)
 		terrain.free()
+	var sky_pixels := {"2starset": "ea69a4dadde5f8523ec648c720e415641cf8c7e2d9dcd378575d12945c804158",
+		"aurora": "18d6a6b624f210b211dc0de562358750ef99d8e4138e6dba3f8ce598f17a6f7e",
+		"sunset": "db265e399594ff8192f195292da1f535572fbbd654080e03a499590b9ca73579"}
+	for theme in sky_pixels:
+		var sky := OriginalSky.new()
+		var passed := sky.build('sky_names "' + theme + '"', Vector2(5600, 5600), assets)
+		if passed:
+			hash.start(HashingContext.HASH_SHA256)
+			for tile in range(1, 33):
+				hash.update(assets.image_cache["skies/" + theme + "%03d" % tile].get_data())
+			if hash.finish().hex_encode() != sky_pixels[theme]:
+				assets.errors.append("Sky pixels differ from the independent preserved-archive decode: " + theme)
+		print("ORIGINAL_SKY " + JSON.stringify({"theme": theme, "passed": passed, "error": sky.error, "panels": sky.mesh.get_surface_count() if passed else 0}))
+		if not passed:
+			assets.errors.append(sky.error)
+		sky.free()
 	quit(0 if assets.errors.is_empty() and count == 39 and strips == 10 else 1)

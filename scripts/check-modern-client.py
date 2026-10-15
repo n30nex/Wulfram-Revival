@@ -27,6 +27,7 @@ def main():
     cases = [('import', ['--editor', '--import'], None),
              ('wire', ['--quit-after', '2', '--script', 'res://check.gd'], 'MODERN_WIRE=PASS'),
              ('original_formats', ['--quit-after', '2', '--script', 'res://check_original_formats.gd'], 'MODERN_ORIGINAL_FORMATS=PASS'),
+             ('original_sky', ['--quit-after', '2', '--script', 'res://check_original_sky.gd'], 'MODERN_ORIGINAL_SKY=PASS'),
              ('audio', ['--script', 'res://check_audio.gd'], 'MODERN_AUDIO=PASS'),
              ('layout', ['--', '--ui-check'], 'MODERN_UI_LAYOUT=PASS'),
              ('input', ['--script', 'res://check_input.gd'], 'MODERN_INPUT=PASS')]

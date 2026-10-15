@@ -4,6 +4,58 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Original mip decoding and sky increment, October 15, 2026
+
+The published 0.1.5 preview fixes a shared bitmap-decoder error: original mip levels
+are stored smallest first, while Godot expects largest first. The previous
+decoder placed small mip images into full-size textures and terrain masks.
+Complete original levels are now reordered without changing any pixels. This
+corrects model, terrain, sky and effect textures. The original composition
+fixture had the same incorrect storage assumption; corrected literal bitmap
+and mask fixtures now fail the old decoder and pass the fix.
+
+It also replaces the placeholder background with the map's original
+32 sky panels. Recovered original geometry and UV rotations are checked against
+an independent reference-executable capture at asymmetric world bounds. The
+original palettes, all stored mip levels and source archives remain unchanged.
+Crossroads uses its first declared theme, 2starset; Mayhem/Frontier use sunset.
+The importer preserves and hashes the map's startup settings, and the client
+reads only the sky directive without executing scripts. Missing data blocks
+deployment with an extraction instruction and clears the previous sky.
+
+All 121 Python tests pass. Native checks compare every panel, UV and texture ID;
+they cover inward winding, invalid settings/bounds, absent textures and cleanup.
+All 96 tiles from the three declared themes load and their complete RGBA mip
+hashes match an independent palette decoder. Existing wire, input and layout
+checks pass. Fog, lighting, alternate-theme cycling, decorative/remaining effect
+coverage and complete scene comparison remain open; this does not certify full
+visual parity or production readiness.
+
+Exact client source `de42a9f33b424eeab6fd026387febb239d3f043f` from
+[PR #43](https://github.com/n30nex/Wulfram-Revival/pull/43) passed all ten push/PR
+checks. The Windows package uses the clean export from
+[Actions 38775778322](https://github.com/n30nex/Wulfram-Revival/actions/runs/38775778322).
+
+- [Windows preview 0.1.5](https://canadaverse.org/downloads/wulfram/Wulfram-Revival-Modern-0.1.5-dev-de42a9f.zip):
+  53,218,027 bytes; SHA-256 `63fc459b5818eb39c1288c347e217b786c9c27f32d12646e78c822f20ccba41f`.
+  A complete public HTTP 200 download matched at 17:20 UTC; its public checksum
+  and source manifest also matched.
+- EXE SHA-256 `d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562`;
+  PCK SHA-256 `a222a9d37e82591b9d4a05568818bf169f68c874eadbd7f60b1af2f8b1a9b12b`.
+  The package includes sealed original archives and each map's unchanged startup settings.
+- The exact exported client rendered the public Frontier match with its original
+  sunset sky, original vehicles and corrected terrain. The captured journey moved
+  83.78 world units and received 246 snapshots, nine accepted shots and 18 combat
+  feedback events, with zero malformed packets or asset errors. It disconnected
+  and exited. This short check does not certify frame-time or physical input/audio.
+- Server alpha2.8 remains at source `0840133e3807617c085112df54763c703b95b32c`.
+  At 17:17 UTC it was ready with 64 bots, 16 human places and zero automatic
+  restarts. This client increment did not restart or modify the game service.
+- Publication adds only the ZIP, checksum and `modern-preview-de42a9f.json`.
+  Removing those three files rolls back this preview publication. Earlier
+  previews and the preserved-client default remain available. The manifest
+  still declares `production_approved: false`.
+
 ## Original sound and accepted combat feedback, October 15, 2026
 
 The published 0.1.4 preview adds original sound playback, volume/background mute controls,

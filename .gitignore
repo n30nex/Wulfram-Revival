@@ -12,6 +12,7 @@ __pycache__/
 .godot/
 client/modern/content/maps/*.land
 client/modern/content/maps/*.tagmap2
+client/modern/content/maps/*.start_script
 client/modern/content/maps/manifest.json
 client/modern/test-fixtures.json
 client/modern/content/original/

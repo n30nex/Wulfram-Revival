@@ -8,10 +8,12 @@ const VehicleInput = preload("res://vehicle_input.gd")
 const Cockpit = preload("res://cockpit.gd")
 const OriginalAudio = preload("res://original_audio.gd")
 const CombatFeedback = preload("res://combat_feedback.gd")
+const OriginalSky = preload("res://original_sky.gd")
 const SCALE := 0.1
 var network := Network.new()
 var camera := Camera3D.new()
 var terrain := Terrain.new()
+var original_sky := OriginalSky.new()
 var visuals: Dictionary = {}
 var assets := Assets.new()
 var assets_loaded := false
@@ -72,6 +74,7 @@ func _ready() -> void:
 	add_child(network)
 	add_child(camera)
 	add_child(terrain)
+	add_child(original_sky)
 	add_child(audio)
 	audio.listener = camera
 	feedback.network = network
@@ -92,7 +95,7 @@ func _ready() -> void:
 	var environment_node := WorldEnvironment.new()
 	var environment := Environment.new()
 	environment.background_mode = Environment.BG_COLOR
-	environment.background_color = Color("7992a3")
+	environment.background_color = Color.BLACK
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	environment.ambient_light_color = Color("a9bcc8")
 	environment.ambient_light_energy = 0.25
@@ -514,6 +517,8 @@ func _load_map(name_value: String) -> void:
 	visuals.clear()
 	terrain_loaded = false
 	terrain.mesh = null
+	original_sky.mesh = null
+	original_sky.theme = ""
 	map_control.overview = null
 	radar_control.overview = null
 	var path := "res://content/maps/" + name_value + ".land"
@@ -528,6 +533,12 @@ func _load_map(name_value: String) -> void:
 		_display_status(_map_error)
 		return
 	world_size = terrain.world_size
+	var sky_path := path.trim_suffix(".land") + ".start_script"
+	if not FileAccess.file_exists(sky_path) or not original_sky.build(FileAccess.get_file_as_string(sky_path), world_size, assets):
+		_map_error = original_sky.error if not original_sky.error.is_empty() else "Original map sky settings are missing. Extract the complete client package."
+		_display_status(_map_error)
+		return
+	camera.far = maxf(1800, world_size.length() * SCALE * 2.0 + 400)
 	map_control.world_size = world_size
 	radar_control.world_size = world_size
 	map_control.overview = terrain.overview
@@ -591,6 +602,7 @@ func _capture() -> void:
 		"deployment": deployment_panel.get_global_rect(), "map_rect": map_control.get_global_rect(),
 		"selected_pad": selected_pad, "snapshots": network.snapshots, "fps": Engine.get_frames_per_second()}
 	record["original_models"] = assets.model_cache.size()
+	record["original_sky"] = original_sky.theme
 	record["original_textures"] = assets.texture_cache.size()
 	record["asset_errors"] = assets.errors
 	record["terrain_build_msec"] = terrain.build_msec

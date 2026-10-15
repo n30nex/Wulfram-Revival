@@ -42,6 +42,7 @@ def original_format_fixture():
     # Independent byte-level reference for the retail palette/mask operations.
     images = {}
     masks = {}
+    decoded_masks = {}
     for name, seed in (('unknown001', 11), ('canyon001', 51), ('4sand001', 101)):
         pixels = bytearray()
         for level in range(8):
@@ -50,12 +51,14 @@ def original_format_fixture():
                 pixels.extend((v, 255-v, (v*3) % 256, 255))
         images[name] = bytes(pixels)
     for suffix in (1, 7):
-        mask = bytes(255 if (index+level+suffix) % 3 == 0 else 0
-                     for level in range(8) for index in range((128 >> level)**2))
-        masks[f'2template{suffix:03}'] = b'\x03\x07\x00' + mask
+        levels = [bytes(255 if (index+level+suffix) % 3 == 0 else 0
+                        for index in range((128 >> level)**2)) for level in range(8)]
+        # Original indexed files store smallest-to-largest; Godot packs largest first.
+        masks[f'2template{suffix:03}'] = b'\x03\x07\x00' + b''.join(reversed(levels))
+        decoded_masks[f'2template{suffix:03}'] = b''.join(levels)
     composed = bytearray(images['canyon001'])
     for name, mask_name in (('unknown001', '2template001'), ('4sand001', '2template007')):
-        for index, mask in enumerate(masks[mask_name][3:]):
+        for index, mask in enumerate(decoded_masks[mask_name]):
             if mask:
                 composed[index*4:index*4+4] = images[name][index*4:index*4+4]
     palette = bytes(channel for value in range(256) for channel in (value, 255-value, (value*3) % 256))
