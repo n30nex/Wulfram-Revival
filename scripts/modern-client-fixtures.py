@@ -69,10 +69,18 @@ def original_format_fixture():
             at = (y*4+x+column)*4
             decoded[at:at+4] = palette[source*3:source*3+3] + b'\xff'
             source += 1
+    # One outward +Z face in the original counter-clockwise convention.
+    model = b'fixture\0' + struct.pack('<H', 1) + b'quad0\0' + struct.pack('<H', 4)
+    for vertex in ((0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1)):
+        model += struct.pack('<iii', *(value * 65536 for value in vertex))
+    model += struct.pack('<HHH', 1, 0, 4)
+    for index, uv in enumerate(((0, 0), (1, 0), (1, 1), (0, 1))):
+        model += struct.pack('<Hii', index, *(value * 65536 for value in uv))
+    model += struct.pack('<H', 0)
     return {'images': {k: v.hex() for k, v in images.items()},
             'masks': {k: v.hex() for k, v in masks.items()},
             'composed_sha256': hashlib.sha256(composed).hexdigest(),
-            'palette': palette.hex(), 'strip': strip.hex(),
+            'palette': palette.hex(), 'strip': strip.hex(), 'model': model.hex(),
             'strip_sha256': hashlib.sha256(decoded).hexdigest()}
 
 

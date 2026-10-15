@@ -21,8 +21,10 @@ class FixtureAssets:
 			image.generate_mipmaps()
 			image_cache["landscape/" + name] = image
 	func texture(name: String, archive := "base") -> Texture2D:
-		return ImageTexture.create_from_image(image_cache[archive + "/" + name])
+		return ImageTexture.create_from_image(image_cache.get(archive + "/" + name, image_cache.get("landscape/" + name)))
 	func _read(archive: String, name: String) -> PackedByteArray:
+		if archive == "shapes":
+			return fixture.model.hex_decode()
 		if archive == "stripmaps2":
 			var data: PackedByteArray = fixture.strip.hex_decode()
 			if name == "truncated":
@@ -48,6 +50,14 @@ func _init() -> void:
 	assert(_hash(result.image.get_data()) == fixture.composed_sha256, "Original binary masks/mips or base-family selection changed")
 	for name in fixture.images:
 		assert(assets.image_cache["landscape/" + name].get_data() == fixture.images[name].hex_decode(), "Composition modified a source bitmap")
+	var model := assets.model("fixture")
+	assert(not model.is_empty())
+	var face: Array = model.mesh.surface_get_arrays(0)
+	for normal in face[Mesh.ARRAY_NORMAL]:
+		assert(normal.dot(Vector3.UP) > .99, "Original model exterior faces were imported inside out")
+	for index in face[Mesh.ARRAY_VERTEX].size():
+		var position: Vector3 = face[Mesh.ARRAY_VERTEX][index]
+		assert(face[Mesh.ARRAY_TEX_UV][index].distance_to(Vector2(position.x, -position.z) * 10) < .00001, "Face orientation correction changed UV bindings")
 	for name in ["normal", "inferred"]:
 		assert(assets.stripmap(name) != null)
 		assert(_hash(assets.image_cache["stripmaps2/" + name].get_data()) == fixture.strip_sha256, "Strip positions, palette or transparency changed")

@@ -223,7 +223,10 @@ func model(name: String) -> Dictionary:
 			surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 			surfaces[material_id] = surface
 		for triangle in range(1, corners - 1):
-			for corner in [0, triangle, triangle + 1]:
+			# Original meshes are counter-clockwise from the exterior. The Z-up
+			# to Y-up rotation preserves handedness; Godot wants clockwise fronts.
+			# Reverse indices, retaining each corner's original position and UV.
+			for corner in [0, triangle + 1, triangle]:
 				surfaces[material_id].set_uv(points[corner][1])
 				surfaces[material_id].add_vertex(points[corner][0])
 			triangle_count += 1
