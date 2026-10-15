@@ -35,12 +35,14 @@ func _run() -> void:
 	var cases := 0
 	for dimensions in [Vector2i(800, 600), Vector2i(1280, 720), Vector2i(1920, 1080), Vector2i(2560, 1440), Vector2i(3840, 2160)]:
 		root.size = dimensions
+		game.status_label.text = "A long server status must remain inside the original cockpit frame. ".repeat(8)
 		game.connection_panel.show()
 		game.deployment_panel.hide()
 		await process_frame
 		await process_frame
 		assert(game.connection_panel.get_global_rect().position.y >= 0)
 		assert(game.connection_panel.get_global_rect().end.y <= game.ui.size.y)
+		assert(game.cockpit_frame.instruments.get_global_rect().end.y <= game.ui.size.y - 16)
 		await _click(game.host_input, game.host_input.size * .5)
 		assert(root.gui_get_focus_owner() == game.host_input, "Scaled login click missed at " + str(dimensions))
 		game.connection_panel.hide()
@@ -58,7 +60,7 @@ func _run() -> void:
 		game._refresh_pads()
 		# Independently compute the visible second pad's coordinate from the
 		# published map rectangle; the GUI must select it through normal routing.
-		var map_point := Vector2(12, 32) + Vector2(4200.0 / 5600.0, 4000.0 / 5600.0) * (game.map_control.size - Vector2(24, 44))
+		var map_point := Vector2(4200.0 / 5600.0, 4000.0 / 5600.0) * game.map_control.size
 		await process_frame
 		await process_frame
 		if DisplayServer.get_name() != "headless":

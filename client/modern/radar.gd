@@ -4,39 +4,61 @@ signal pad_selected(id: int)
 var network: WulfNetwork
 var world_size := Vector2(5600, 5600)
 var local_view := false
+var classic := false
+var overview: Texture2D
 var selected := 0
 var _markers: Dictionary = {}
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(200, 164)
+	custom_minimum_size = Vector2.ZERO if classic else Vector2(200, 164)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
 func _process(_delta: float) -> void:
 	queue_redraw()
 
 func _draw() -> void:
-	var region := Rect2(Vector2(12, 32), size - Vector2(24, 44))
-	draw_style_box(_panel(), Rect2(Vector2.ZERO, size))
-	draw_string(ThemeDB.fallback_font, Vector2(14, 22), "RADAR" if local_view else "TACTICAL MAP", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("9eafba"))
-	for index in range(1, 4):
-		var fraction := index / 4.0
-		draw_line(region.position + Vector2(region.size.x * fraction, 0), region.position + Vector2(region.size.x * fraction, region.size.y), Color("25333f"))
-		draw_line(region.position + Vector2(0, region.size.y * fraction), region.position + Vector2(region.size.x, region.size.y * fraction), Color("25333f"))
+	var region := Rect2(Vector2.ZERO, size) if classic else Rect2(Vector2(12, 32), size - Vector2(24, 44))
+	if not classic:
+		draw_style_box(_panel(), Rect2(Vector2.ZERO, size))
+		draw_string(ThemeDB.fallback_font, Vector2(14, 22), "RADAR" if local_view else "TACTICAL MAP", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("9eafba"))
 	_markers.clear()
 	if network == null:
 		return
 	var center := world_size * 0.5
 	var extent := world_size
+	var yaw := 0.0
 	if local_view and network.entities.has(network.vehicle_id):
 		var p: Vector3 = network.entities[network.vehicle_id].get("pos", Vector3.ZERO)
 		center = Vector2(p.x, p.y)
 		extent = Vector2(850, 850)
+		yaw = network.entities[network.vehicle_id].get("rot", Vector3.ZERO).z
+	var right := Vector2(sin(yaw), -cos(yaw))
+	var forward := Vector2(cos(yaw), sin(yaw))
+	if local_view:
+		var points := PackedVector2Array()
+		var uvs := PackedVector2Array()
+		for index in 64:
+			var delta := Vector2(cos(index * TAU / 64.0), sin(index * TAU / 64.0)) * .5
+			points.append(region.get_center() + delta * region.size)
+			uvs.append((center + (right * delta.x - forward * delta.y) * extent) / world_size)
+		draw_colored_polygon(points, Color.BLACK)
+		if overview != null:
+			draw_polygon(points, PackedColorArray([Color.WHITE]), uvs, overview)
+	else:
+		draw_rect(region, Color.BLACK)
+		if overview != null:
+			draw_texture_rect(overview, region, false)
 	for id in network.entities:
 		var item: Dictionary = network.entities[id]
 		if not item.has("pos") or not item.has("unit"):
 			continue
 		var p: Vector3 = item.pos
-		var uv := (Vector2(p.x, p.y) - center) / extent + Vector2(0.5, 0.5)
+		var delta := (Vector2(p.x, p.y) - center) / extent
+		if local_view:
+			delta = Vector2(delta.dot(right), -delta.dot(forward))
+			if delta.length() > .47:
+				continue
+		var uv := delta + Vector2(0.5, 0.5)
 		var point := region.position + uv * region.size
 		if not region.has_point(point):
 			continue
@@ -50,7 +72,10 @@ func _draw() -> void:
 			if id == selected:
 				draw_arc(point, 8, 0, TAU, 20, Color.WHITE, 1.5, true)
 		elif item.unit in [0, 1]:
-			draw_circle(point, 2.5 if id != network.vehicle_id else 4.0, color)
+			if id == network.vehicle_id and local_view:
+				draw_colored_polygon(PackedVector2Array([point + Vector2(0, -6), point + Vector2(5, 5), point, point + Vector2(-5, 5)]), color)
+			else:
+				draw_circle(point, 2.5 if id != network.vehicle_id else 4.0, color)
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
