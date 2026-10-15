@@ -138,7 +138,11 @@ window size; physical mouse/DPI and human handling approval remain open.
 The native asset loader reads the original visual meshes and texture archives;
 the original terrain square indexing, binary mip composition, cockpit frame
 and terrain-backed radar/map are now implemented and regression checked.
-Sky/decorative/effect/UI coverage, runtime texture-variant behavior and full
+Appended replacement textures now resolve to the final original archive member.
+The 0.1.4 preview adds original sound clips and accepted shot/impact/explosion
+feedback; server alpha2.8 preserves legacy-client traffic. Bounded native and
+legacy live journeys pass, including actual Tank and Scout identity checks.
+Sky/decorative/remaining effect/UI coverage, runtime texture-variant behavior and full
 visual comparison remain required. Approximate development geometry is not
 acceptable final content.
 Compare handling and combat with the preserved client and retain the recognizable
