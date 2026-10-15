@@ -87,6 +87,13 @@ preserved client's rendering or physical input.
 
 ## Review and release
 
+The active replacement-client work lives in `client/modern`; its
+[build and test guide](client/modern/README.md) describes the pinned Godot toolchain,
+synthetic cross-language wire fixtures, headless layout checks, optional bounded
+online check and native screenshots. The Windows Actions artifact is separate
+from the preserved-client package. Never count headless checks as physical
+mouse/DPI proof or promote the development preview as the stable download.
+
 Explain the player-visible problem, the resulting behavior and the checks run
 on the exact candidate. Link its roadmap issue and disclose untested coverage.
 Changes to the packaged client need the client-harness and actual input/display
