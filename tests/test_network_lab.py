@@ -9,6 +9,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 LAB = runpy.run_path(str(Path(__file__).resolve().parents[1]/'scripts/network-lab.py'))
 
@@ -22,7 +23,28 @@ def hello(port):
     return frame(b'\x13\x01'+struct.pack('>HHH',port,1,len(host))+host)
 
 
+def wait_ready(report):
+    deadline = time.monotonic()+5
+    while time.monotonic() < deadline:
+        try:
+            document = json.loads(report.read_text())
+        except (FileNotFoundError, PermissionError):
+            # Windows can deny reads briefly while the ready report is being
+            # atomically installed. Existence alone is not readiness.
+            time.sleep(.01)
+            continue
+        if document.get('status') == 'ready':
+            return document
+        raise AssertionError(f"Relay did not become ready: {document.get('status')}")
+    raise TimeoutError('Relay readiness report remained absent or unreadable')
+
+
 class NetworkLabTests(unittest.TestCase):
+    def test_readiness_retries_a_transient_windows_report_access_error(self):
+        ready = {'status': 'ready', 'listen_port': 2631}
+        with patch.object(Path, 'read_text', side_effect=[PermissionError('sharing violation'), json.dumps(ready)]):
+            self.assertEqual(wait_ready(Path('unused-test-report')), ready)
+
     def test_fragmented_tcp_preserves_unrelated_payloads_and_checks_endpoint(self):
         rewrite = LAB['rewrite_server_frames']
         original = hello(2628)+frame(b'\x13\x02private-test-key')
@@ -104,9 +126,7 @@ class NetworkLabTests(unittest.TestCase):
             result = []
             relay_thread = threading.Thread(target=lambda:result.append(LAB['run'](args)),daemon=True)
             relay_thread.start()
-            deadline = time.monotonic()+5
-            while not report.exists() and time.monotonic() < deadline: time.sleep(.01)
-            destination = ('127.0.0.1',json.loads(report.read_text())['listen_port'])
+            destination = ('127.0.0.1',wait_ready(report)['listen_port'])
             with socket.create_connection(destination,timeout=5) as client:
                 client.settimeout(5)
                 expected = hello(destination[1]); actual = bytearray()
@@ -161,9 +181,7 @@ class NetworkLabTests(unittest.TestCase):
             result = []
             relay_thread = threading.Thread(target=lambda:result.append(LAB['run'](args)),daemon=True)
             relay_thread.start()
-            deadline = time.monotonic()+5
-            while not report.exists() and time.monotonic() < deadline: time.sleep(.01)
-            destination = ('127.0.0.1',json.loads(report.read_text())['listen_port'])
+            destination = ('127.0.0.1',wait_ready(report)['listen_port'])
             with socket.create_connection(destination,timeout=5) as client, \
                     socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as udp, \
                     socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as unexpected:

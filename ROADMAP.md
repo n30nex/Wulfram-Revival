@@ -154,6 +154,12 @@ another reaches 64 bots plus 16 active human vehicles using mixed client types.
 This is desktop capacity evidence, not Pi performance qualification. The exact
 export passed a live native journey, and an outside-network legacy journey
 passed after deployment. Original media remains byte-for-byte unchanged.
+The published 0.1.8 preview restores cargo shortcuts, cockpit controls, original
+carried crate models and pickup/drop sounds. A private native-contact journey
+verifies pickup, drop, friendly deployment and replay rejection while carrying
+the next crate. Server alpha2.10 also rejects forged enemy-cargo deployment.
+Complete construction rules, power and stolen-cargo unlocking remain in M5;
+these controls do not close that systems milestone.
 Sky fog/lighting, decorative/remaining effect/UI coverage, runtime texture-variant behavior and full
 visual comparison remain required. Approximate development geometry is not
 acceptable final content.

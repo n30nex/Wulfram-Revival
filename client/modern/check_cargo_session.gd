@@ -29,6 +29,8 @@ func _run() -> void:
 	var completed: Array = []
 	var forged_at := 0.0
 	var locked_retained := false
+	var replayed_for := 0
+	var replay_at := 0.0
 	while Network.now() - started < 25.0:
 		await process_frame
 		if network.state == "offline":
@@ -50,11 +52,10 @@ func _run() -> void:
 		if Network.now() >= input_at:
 			input_at = Network.now() + .04
 			network.controls(.1, 0, 0, false, false, 0, .8)
+		if confirmed_releases > sent:
+			break # An old request released a newly picked-up crate.
 		if confirmed_releases > completed.size():
 			completed.append({"phase": completed.size(), "state_confirmed": network.cargo_request_sequence == -1})
-			# Replay the exact accepted request. It must not act on later cargo.
-			for repeat in 2:
-				network._send_udp(packets.back())
 		if completed.size() == 3:
 			network.controls(0, 0, 0, false, false, 0, .8)
 			# Let the simulation's next observation see the final created crate
@@ -64,6 +65,15 @@ func _run() -> void:
 		if not network.carrying or sent > completed.size():
 			continue
 		var index := completed.size()
+		if index > replayed_for:
+			# Replay while the NEXT crate is carried. Replaying into an empty
+			# slot would pass even if reliable-command deduplication were broken.
+			for repeat in 2:
+				network._send_udp(packets[index-1])
+			replayed_for = index
+			replay_at = Network.now()
+		if index > 0 and Network.now() - replay_at < .2:
+			continue
 		if index == 2:
 			if network.cargo_item != 13 or network.release_cargo(true) != -1:
 				break
@@ -82,11 +92,11 @@ func _run() -> void:
 			break
 		packets.append(network._pending[sequence].packet)
 		sent += 1
-	var passed := completed.size() == 3 and locked_retained and network.native_lifecycle and network.malformed == 0
+	var passed := completed.size() == 3 and replayed_for == 2 and locked_retained and network.native_lifecycle and network.malformed == 0
 	for row in completed:
 		passed = passed and row.state_confirmed
 	print("MODERN_SESSION " + JSON.stringify({"passed": passed, "journey": "cargo", "completed": completed,
-		"locked_retained": locked_retained, "native_lifecycle": network.native_lifecycle,
+		"locked_retained": locked_retained, "replays_while_carrying": replayed_for, "native_lifecycle": network.native_lifecycle,
 		"malformed": network.malformed, "snapshots": network.snapshots, "seconds": Network.now() - started}))
 	network.disconnect_game()
 	network.queue_free()
