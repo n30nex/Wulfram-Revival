@@ -147,6 +147,13 @@ legacy live journeys pass, including actual Tank and Scout identity checks.
 The 0.1.6 preview adds team/global chat, a player scoreboard and complete score
 updates. Engine GUI checks cover typing, channel popups, held-input release,
 scrolling and 80 roster rows. Private peers verify team isolation and cleanup.
+The published 0.1.7 preview and live server alpha2.9 add reliable death/respawn
+and map transitions with connection/map/vehicle binding. A bounded private
+journey rejects stale input/world/connection packets and cleans up native bodies;
+another reaches 64 bots plus 16 active human vehicles using mixed client types.
+This is desktop capacity evidence, not Pi performance qualification. The exact
+export passed a live native journey, and an outside-network legacy journey
+passed after deployment. Original media remains byte-for-byte unchanged.
 Sky fog/lighting, decorative/remaining effect/UI coverage, runtime texture-variant behavior and full
 visual comparison remain required. Approximate development geometry is not
 acceptable final content.
