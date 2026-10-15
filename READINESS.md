@@ -6,7 +6,7 @@ out of scope for the first release; the Pi server runs on Linux.
 
 ## Original model exterior correction, October 15, 2026
 
-The 0.1.3 candidate corrects model triangle winding when importing the original
+The published 0.1.3 preview corrects model triangle winding when importing the original
 right-handed meshes into Godot. Exterior surfaces were being culled, exposing
 interior/bottom faces and hiding top panels. Reversing triangle indices restores
 the exterior and outward normals while retaining every original position, UV
@@ -17,6 +17,26 @@ fix and passes afterward, with unchanged UV bindings. Fixed-camera GPU model
 gallery captures verify exterior rendering on preserved repair/refuel pads,
 Tank and Scout. This correction does not close remaining sky/effect/decorative
 coverage, complete client systems, physical input or human approval gates.
+
+[PR #39](https://github.com/n30nex/Wulfram-Revival/pull/39) is merged as `93bab3b`.
+The exact client source is `ac2831bde0ac0e291f584167704e784c0abeadac`, from
+[Actions 38743435633](https://github.com/n30nex/Wulfram-Revival/actions/runs/38743435633).
+All required checks passed, including the new regression, wire, original-format,
+layout and input checks. The exported build rendered a live Frontier match,
+moved 90.03 world units and received 239 snapshots without malformed packets.
+
+- [Optional Windows preview ZIP](https://canadaverse.org/downloads/wulfram/Wulfram-Revival-Modern-0.1.3-dev-ac2831b.zip):
+  50,092,954 bytes; SHA-256 `bb503fd9cae3d8d6a562ede5de744a7460bf8f5b6bc20262d0aa51625041ecb2`.
+  The complete public HTTP 200 download, checksum and manifest matched at
+  13:44 UTC.
+- EXE SHA-256 `d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562`;
+  PCK SHA-256 `8a698b6f40a8ad369f162aa91d6b55af23371fdade6044be7d18c6a50139e201`.
+- Server alpha2.7, original asset files and the preserved-client default remain
+  unchanged. Preview rollback removes only the new ZIP, checksum and
+  `modern-preview-ac2831b.json`. Earlier versions remain available.
+
+The manifest retains `production_approved: false`; complete appearance, client
+systems and physical/human qualification remain unfinished.
 
 ## Original terrain and cockpit increment, October 15, 2026
 
