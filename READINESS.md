@@ -4,6 +4,62 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Native Windows development preview, October 15, 2026
+
+The maintainer moved replacement-client development ahead of the first stable
+release and requires the original models/textures to retain their appearance.
+[PR #33](https://github.com/n30nex/Wulfram-Revival/pull/33) is merged as `cb5d773`.
+The exact tested build source is `5fe9b117068a2873953da15ce3138ec490d4a70b`, from
+[Actions 38718928409](https://github.com/n30nex/Wulfram-Revival/actions/runs/38718928409).
+The exported build manifest reports a clean source tree and Godot 4.7.2 stable.
+
+- `WulframRevival.exe`: SHA-256 `d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562`.
+- `WulframRevival.pck`: SHA-256 `2d49e1c16c7d84158e3e4749db1e4006240a62ff8a72f6c41615209ebbc5e432`.
+- The [complete optional preview ZIP](https://canadaverse.org/downloads/wulfram/Wulfram-Revival-Modern-0.1.0-dev-5fe9b11.zip)
+  is 50,354,923 bytes, SHA-256
+  `b2ea6e59772eed582f46961ce3f7c52b58349bedfa22ffd3ad07c7d604298ae9`.
+  A complete public HTTP download returned 200 and matched that digest at
+  10:42 UTC. `PACKAGE.json` seals the code, original archives and map files.
+
+The client talks directly to the unchanged public TCP/UDP server. It renders
+the server's authoritative physics state; no replacement hover controller was
+introduced. It includes native UI, team/deployment selection, Tank/Scout choices,
+two cameras, radar/map, owner vitals and renderer-owned screenshots. Input for
+movement, primary fire and jump is encoded through the existing protocol.
+
+Validation:
+
+- Cross-language wire fixtures match the authoritative serializer; 1,128
+  truncated packets are rejected. Tests cover independent update streams,
+  late updates after deletion and quantizer compatibility.
+- Headless layout checks pass at four requested logical sizes from 800x600 to
+  2560x1440. They do not qualify physical DPI, 4K or hardware coverage.
+- Local archive checks load 39 core original visual models, 4,244 triangles and
+  175 referenced textures without missing assets. Original mesh positions, UVs,
+  attachment points, palette pixels and stored mip levels are retained.
+- Terrain loaders pass Crossroads, Mayhem and Frontier. They retain original
+  texture references and bitmap sizes, including Mayhem's non-square UI tile.
+- A native 1920x1080 click check selected a team and deployed in the prototype.
+  The general window-capture tool timed out; client-rendered screenshots provide
+  the visual record. The tested host is Windows 10 with a GTX 1060 6GB.
+- The exact exported build passed a bounded headless public connection/spawn/
+  movement check on Frontier (220 snapshots, no malformed packets), then a
+  windowed GPU run on Crossroads (94 snapshots, no malformed packets, terrain
+  loaded). Both ended their test connection. This is not a soak or full combat
+  qualification. Existing 111 Python tests and all build jobs pass.
+
+The preview and public manifest explicitly have `production_approved: false`.
+Original terrain variant/template priority, skies, decorative assets, effects,
+lighting and cockpit artwork still need reference comparison. Aiming, audio,
+complete weapon/equipment interfaces, prediction/reconciliation, broad physical
+display/input tests and agreed human approvals remain open. Do not label this
+preview production-ready or replace the default download with it.
+
+Publication added only the uniquely named ZIP, checksum and preview manifest.
+The previous player page/download and `wulfram.service` were unchanged; the
+public process remained PID 1168652 with no automatic restarts. Rollback is
+removal of those three new preview files, with no service or configuration change.
+
 ## Live alpha2.6 and reliable map handovers, October 13, 2026
 
 The public Pi server runs **`0.4.0-alpha2.6`**, source
