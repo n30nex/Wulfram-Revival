@@ -33,6 +33,7 @@ def main():
              ('layout', ['--', '--ui-check'], 'MODERN_UI_LAYOUT=PASS'),
              ('input', ['--script', 'res://check_input.gd'], 'MODERN_INPUT=PASS')]
     cases.append(('comms', ['--script', 'res://check_comms.gd'], 'MODERN_COMMS=PASS'))
+    cases.append(('cargo', ['--script', 'res://check_cargo.gd'], 'MODERN_CARGO=PASS'))
     for name, options, marker in cases:
         started = time.monotonic()
         try:

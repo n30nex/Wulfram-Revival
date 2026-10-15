@@ -4,6 +4,43 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Native cargo increment, October 15, 2026
+
+The 0.1.8 candidate restores the original comma/period cargo shortcuts and adds
+clickable cockpit controls, cargo names, docked state and pending confirmation.
+Typing punctuation in chat or using a menu does not invoke gameplay commands.
+The client retains cargo until the server confirms its removal; acknowledgement
+alone does not imply successful deployment. Timeouts report uncertainty, and
+death/map/reconnect cleanup cancels requests without binding them to a new body.
+
+Carried crates use the unchanged original mesh at each vehicle's original
+`cargo_pos` attachment, including other players. Confirmed state changes play
+the original pickup/drop sounds. Original missile-launcher and skypump models
+are mapped to their deployed unit types. No media is redrawn or replaced.
+
+A server regression reproduced an authority gap: a forged request could deploy
+enemy cargo, despite the original client's locked-cargo rule. The server now
+rejects that action without consuming the cargo; dropping retains its team.
+All 135 Python tests pass. Native wire checks reject 4,903 truncated packets;
+all ten native check groups pass. GUI routing checks cover five requested window
+sizes, pending/timeout state, chat isolation, stale-owner cleanup and original
+attachments. A separate GPU run also requires focused-window shortcut routing
+and captures the original carried crate. These are engine events, not physical
+mouse, DPI or hardware approval.
+
+A 13.18-second private native-physics run with 64 bots and native/legacy peers
+passed normal contact pickup, crate drop, friendly gun-turret deployment,
+duplicate request replay and locked enemy drop. A forged enemy-deploy request
+left the cargo intact. Each action created exactly one expected entity. There
+were no malformed packets or dropped catch-up ticks; all human sessions and UDP
+peers were removed and the test server stopped. The short native cargo journey
+does not qualify complete mixed-client matches or Pi full-capacity performance.
+
+See [cargo behavior and limits](client/modern/CARGO.md). Original construction
+rules, power, stolen-cargo unlocking, complete equipment/prediction, full visual
+comparison and human approval remain open. This candidate is not production
+certification and does not promote the replacement to the default download.
+
 ## Native lifecycle and full-capacity increment, October 15, 2026
 
 The published 0.1.7 preview and live server alpha2.9 add opt-in reliable lifecycle transitions

@@ -1512,6 +1512,10 @@ def _handle_cargo_request(
         return None
     if not CARGO_ITEM_ID_MIN <= item_id <= CARGO_ITEM_ID_MAX:
         return None
+    # The original client treats enemy cargo as locked. Enforce the same rule
+    # at authority; a forged DROP_REQUEST must not claim an enemy installation.
+    if deploy and cargo_team_id != carrier.team:
+        return None
 
     carrier.carried_cargo_item_id = None
     carrier.carried_cargo_team_id = 0

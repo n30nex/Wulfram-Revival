@@ -11,10 +11,13 @@ signal object_removed(id: int, explosion: bool, previous: Dictionary)
 signal message_received(message: String, source: int, scope: int, kind: int)
 signal roster_changed
 signal reliable_delivered(sequence: int, success: bool)
+signal cargo_changed(holding: bool)
 
 const Wire = preload("res://wire.gd")
 const NativeWorld = preload("res://native_world.gd")
 const MAX_BUFFER := 262144
+# Original unit-info names, cargo IDs 0..11 map to unit types 25..36.
+const CARGO_NAMES := ["Power Cell", "Refuel Pad", "Repair Pad", "Shield", "Flak Turret", "Gun Turret", "Heavy Missile Silo", "Missile Launcher", "Skypump", "Portal", "Darklight", "Spy Bug"]
 var tcp := StreamPeerTCP.new()
 var udp := PacketPeerUDP.new()
 var incoming := PackedByteArray()
@@ -38,6 +41,9 @@ var docked := false
 var docking_pad := 0
 var carrying := false
 var cargo_item := 0
+var carried_by_player: Dictionary = {}
+var cargo_request_sequence := -1
+var _cargo_deadline := 0.0
 var players_by_entity: Dictionary = {}
 var map_name := ""
 var state := "offline"
@@ -116,14 +122,14 @@ func disconnect_game() -> void:
 	_last_vitals_sequence = -1
 	_pending.clear()
 	players_by_entity.clear()
+	carried_by_player.clear()
 	weapons.clear()
 	vehicle_settings.clear()
 	weapon_mask = 0
 	action_maximum = 1000.0
 	pulse_charge = 0.0
 	repair_charge = 0.0
-	docked = false
-	carrying = false
+	_reset_equipment()
 	reliable_sequence = 0
 	snapshots = 0
 	movement_packets = 0
@@ -241,6 +247,41 @@ func _process(_delta: float) -> void:
 		elif now() >= delivery.retry:
 			_send_udp(delivery.packet)
 			delivery.retry = now() + 0.5
+	_check_cargo_timeout()
+
+func _reset_equipment() -> void:
+	docked = false
+	docking_pad = 0
+	carrying = false
+	cargo_item = 0
+	_pending.erase(cargo_request_sequence)
+	cargo_request_sequence = -1
+
+func _check_cargo_timeout() -> void:
+	if cargo_request_sequence >= 0 and now() >= _cargo_deadline:
+		_pending.erase(cargo_request_sequence)
+		cargo_request_sequence = -1
+		status_changed.emit("Cargo action could not be confirmed. Check your cargo before retrying.")
+
+func can_release_cargo(deploy: bool) -> bool:
+	return state == "ready" and vehicle_id != 0 and carrying and cargo_request_sequence < 0 and (not deploy or cargo_item in range(CARGO_NAMES.size()))
+
+func release_cargo(deploy: bool) -> int:
+	if not can_release_cargo(deploy):
+		return -1
+	cargo_request_sequence = reliable(0x2b, Wire.new().put(int(deploy), 32).data)
+	if cargo_request_sequence >= 0:
+		_cargo_deadline = now() + 5.0
+		status_changed.emit("Waiting for the server to confirm cargo %s…" % ("deployment" if deploy else "drop"))
+	else:
+		status_changed.emit("Too many pending commands. Try the cargo action again shortly.")
+	return cargo_request_sequence
+
+func cargo_description() -> String:
+	if not carrying:
+		return "Cargo: empty"
+	var name_text: String = CARGO_NAMES[cargo_item] if cargo_item >= 0 and cargo_item < CARGO_NAMES.size() else "Enemy cargo (locked)" if cargo_item == 13 else "Unidentified cargo"
+	return "Cargo: " + name_text + (" · pending" if cargo_request_sequence >= 0 else "")
 
 func _send_handshake() -> void:
 	# Both ROOT records share one datagram. Older servers finish on the known
@@ -387,6 +428,7 @@ func _handle(packet: PackedByteArray, reliable_transport := false) -> void:
 			if reader.valid:
 				roster.erase(id)
 				_roster_stats.erase(id)
+				carried_by_player.erase(id)
 				for entity in players_by_entity.keys():
 					if players_by_entity[entity] == id:
 						players_by_entity.erase(entity)
@@ -422,9 +464,24 @@ func _handle(packet: PackedByteArray, reliable_transport := false) -> void:
 			var has_cargo := reader.take(8) != 0
 			reader.take(8)
 			var item := reader.take(8)
-			if reader.valid and player == player_id and (scoped_owner < 0 or scoped_owner == vehicle_id):
-				carrying = has_cargo
-				cargo_item = item
+			if reader.valid:
+				if player != player_id or (vehicle_id != 0 and (scoped_owner < 0 or scoped_owner == vehicle_id)):
+					if not has_cargo:
+						carried_by_player.erase(player)
+					elif carried_by_player.has(player) or carried_by_player.size() < 256:
+						carried_by_player[player] = item
+					if player == player_id:
+						var changed_cargo := carrying != has_cargo
+						carrying = has_cargo
+						cargo_item = item if has_cargo else 0
+						if changed_cargo:
+							cargo_changed.emit(has_cargo)
+							if has_cargo:
+								status_changed.emit("Cargo picked up. Comma drops it; period deploys friendly cargo.")
+						if not has_cargo and cargo_request_sequence >= 0:
+							_pending.erase(cargo_request_sequence)
+							cargo_request_sequence = -1
+							status_changed.emit("Cargo released.")
 		0x38:
 			reader.take(32)
 			var pad := reader.take(32)
@@ -444,13 +501,13 @@ func _handle(packet: PackedByteArray, reliable_transport := false) -> void:
 			map_name = new_map
 			entities.clear()
 			players_by_entity.clear()
+			carried_by_player.clear()
 			for pending_sequence in _pending.keys():
 				reliable_delivered.emit(pending_sequence, false)
 			_pending.clear()
 			_team_requested = 0
 			_last_tank_tick = -1
-			docked = false
-			carrying = false
+			_reset_equipment()
 			vehicle_id = 0
 			_entity_sequences.clear()
 			_deleted.clear()
@@ -495,6 +552,7 @@ func _handle(packet: PackedByteArray, reliable_transport := false) -> void:
 				if reader.valid:
 					object_removed.emit(id, explosion, entities.get(id, {}).duplicate())
 					entities.erase(id)
+					carried_by_player.erase(players_by_entity.get(id, 0))
 					players_by_entity.erase(id)
 					_entity_sequences.erase(id)
 					_deleted[id] = true
@@ -502,8 +560,8 @@ func _handle(packet: PackedByteArray, reliable_transport := false) -> void:
 						_deleted.erase(_deleted.keys()[0])
 					if vehicle_id == id:
 						vehicle_id = 0
-						docked = false
-						carrying = false
+						carried_by_player.erase(player_id)
+						_reset_equipment()
 						status_changed.emit("Vehicle lost. Choose a friendly repair pad to redeploy.")
 		0x0b:
 			var tick := reader.take(32)
@@ -530,10 +588,8 @@ func _accept_tank(id: int, unit: int, side: int, position: Vector3, rotation: Ve
 	vehicle_id = id
 	team = side
 	if is_new:
-		docked = false
-		carrying = false
-		docking_pad = 0
-		cargo_item = 0
+		carried_by_player.erase(player_id)
+		_reset_equipment()
 		deployed.emit()
 
 func _apply_vitals(stats: Dictionary) -> void:

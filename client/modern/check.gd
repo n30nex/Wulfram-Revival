@@ -76,7 +76,7 @@ func _init() -> void:
 	assert(network.send_chat("invalid\ntext") == -1)
 	network.free()
 	var truncated_checks := 0
-	for name in ["snapshot", "tank", "translation", "message", "behavior", "transients", "combat_events", "roster", "scores", "birth", "death", "roster_remove", "player_chat"]:
+	for name in ["snapshot", "tank", "translation", "message", "behavior", "transients", "combat_events", "roster", "scores", "birth", "death", "roster_remove", "player_chat", "carrying", "carrying_enemy", "not_carrying"]:
 		var bytes: PackedByteArray = fixture[name].hex_decode()
 		for size_value in range(1, bytes.size()):
 			var broken := Network.new()

@@ -41,6 +41,8 @@ var _map_error := ""
 var _closing := false
 var status_label := Label.new()
 var telemetry_label := Label.new()
+var cargo_drop_button: Button
+var cargo_deploy_button: Button
 var health_bar := ProgressBar.new()
 var fuel_bar := ProgressBar.new()
 var charge_bar := ProgressBar.new()
@@ -128,6 +130,7 @@ func _ready() -> void:
 	network.status_changed.connect(_display_status)
 	network.world_changed.connect(_load_map)
 	network.deployed.connect(_on_deployed)
+	network.cargo_changed.connect(func(holding: bool): audio.play("CARGO_PICKUP" if holding else "CARGO_DROP"))
 	var args := OS.get_cmdline_user_args()
 	for value in args:
 		if value.begins_with("--capture-dir="):
@@ -304,7 +307,18 @@ func _build_ui() -> void:
 	status_label.add_theme_font_size_override("font_size", 15)
 	cockpit.add_child(status_label)
 	telemetry_label.add_theme_font_size_override("font_size", 13)
-	cockpit.add_child(telemetry_label)
+	telemetry_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	telemetry_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	var cargo_row := HBoxContainer.new()
+	cockpit.add_child(cargo_row)
+	cargo_row.add_child(telemetry_label)
+	cargo_drop_button = _button(cargo_row, "DROP / ,", func(): _release_cargo(false))
+	cargo_deploy_button = _button(cargo_row, "DEPLOY / .", func(): _release_cargo(true))
+	for button in [cargo_drop_button, cargo_deploy_button]:
+		button.custom_minimum_size.y = 26
+		button.add_theme_font_size_override("font_size", 13)
+	cargo_drop_button.tooltip_text = "Drop your cargo box. Press comma while driving, or use this button with F1 open."
+	cargo_deploy_button.tooltip_text = "Deploy the contents of friendly cargo. Enemy cargo is locked. Press period while driving."
 	comms.network = network
 	cockpit.add_child(comms)
 	map_control = Radar.new()
@@ -406,7 +420,10 @@ func _process(delta: float) -> void:
 	if network.vehicle_id == 0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		vehicle_input.clear_motion()
-	telemetry_label.text = "%s · %s · %d ms" % [{1: "Crimson", 2: "Azure"}.get(network.team, "Unassigned"), network.map_name.capitalize(), network.ping_ms] if network.state == "ready" else ""
+	telemetry_label.text = "%s · %s · %d ms · %s%s" % [{1: "Crimson", 2: "Azure"}.get(network.team, "Unassigned"), network.map_name.capitalize(), network.ping_ms, network.cargo_description(), " · Docked" if network.docked else ""] if network.state == "ready" else ""
+	telemetry_label.tooltip_text = telemetry_label.text
+	cargo_drop_button.disabled = not network.can_release_cargo(false)
+	cargo_deploy_button.disabled = not network.can_release_cargo(true)
 	if Network.now() >= _refresh_at:
 		_refresh_pads()
 		_refresh_at = Network.now() + 1.0
@@ -444,7 +461,7 @@ func _driving() -> bool:
 	return network.vehicle_id != 0 and get_window().has_focus() and not _smoke and not _menu_open and comms.mode.is_empty() and not _input_rearm and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 
 static func _held_controls() -> bool:
-	for key in [KEY_W, KEY_A, KEY_S, KEY_D, KEY_Q, KEY_E, KEY_R, KEY_SPACE, KEY_1, KEY_2]:
+	for key in [KEY_W, KEY_A, KEY_S, KEY_D, KEY_Q, KEY_E, KEY_R, KEY_SPACE, KEY_1, KEY_2, KEY_COMMA, KEY_PERIOD]:
 		if Input.is_physical_key_pressed(key):
 			return true
 	return Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
@@ -514,6 +531,13 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	elif event.keycode == KEY_F12:
 		_capture()
 		get_viewport().set_input_as_handled()
+	elif event.keycode in [KEY_COMMA, KEY_PERIOD] and _driving() and not event.ctrl_pressed and not event.alt_pressed and not event.shift_pressed and not event.meta_pressed:
+		_release_cargo(event.keycode == KEY_PERIOD)
+		get_viewport().set_input_as_handled()
+
+func _release_cargo(deploy: bool) -> void:
+	if not _closing and comms.mode.is_empty():
+		network.release_cargo(deploy)
 
 func _quit_safely(code := 0) -> void:
 	if _closing:
@@ -557,6 +581,21 @@ func _sync_visuals(delta: float) -> void:
 		visuals[id].position = visuals[id].position.lerp(target, 1.0 - exp(-18.0 * delta))
 		if item.has("rot"):
 			visuals[id].basis = Basis(visuals[id].basis.get_rotation_quaternion().slerp(VehicleInput.world_basis(item.rot).get_rotation_quaternion(), 1.0 - exp(-18.0 * delta)))
+		var player: int = network.players_by_entity.get(id, network.player_id if id == network.vehicle_id else 0)
+		var carried: Node = visuals[id].get_node_or_null("CarriedCargo")
+		var has_cargo: bool = item.unit in [0, 1] and network.carried_by_player.has(player)
+		if has_cargo and carried == null:
+			var original: Dictionary = assets.model(Assets.model_name(item.unit, item.get("team", 0)))
+			var cargo: Dictionary = assets.model("cargo")
+			if original.get("attachments", {}).has("cargo_pos") and not cargo.is_empty():
+				var box := MeshInstance3D.new()
+				box.name = "CarriedCargo"
+				box.mesh = cargo.mesh
+				box.position = original.attachments.cargo_pos
+				visuals[id].add_child(box)
+		elif not has_cargo and carried != null:
+			visuals[id].remove_child(carried)
+			carried.queue_free()
 	if network.entities.has(network.vehicle_id) and visuals.has(network.vehicle_id):
 		var item: Dictionary = network.entities[network.vehicle_id]
 		var target: Vector3 = visuals[network.vehicle_id].position

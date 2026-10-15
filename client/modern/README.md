@@ -22,6 +22,9 @@ The client retries a busy pad for up to 20 seconds; choose another if it stays b
 - Space: jump jets; mouse wheel: adjust hover strength; left mouse: primary weapon.
 - Right mouse or 1: Tank pulse / Scout repair; 2: Tank piercer; R: Scout repair.
 - F2: first/third-person camera; F12: screenshot.
+- Comma: drop carried cargo; period: deploy its contents. Touch a crate to pick
+  it up. The cockpit shows its name and pending server confirmation. The same
+  actions are clickable with F1 open. Enemy cargo is locked against deployment.
 - Enter: chat; Shift+Enter: team chat. Choose All players or Your team, then
   Enter or Send. `/s` commands go to the server. Escape closes and keeps a draft.
 - F4: player scoreboard, including team, tag, match kills and connection totals.
@@ -116,6 +119,9 @@ packet loss, respawn, map replacement, stale packet replay and same-callsign
 reconnect checks. See [native lifecycle protocol](NATIVE_NETWORK.md).
 See [combat/audio protocol and checks](COMBAT_AUDIO.md) for the accepted-event
 stream, original sound coverage, silent mixer test and remaining limits.
+`--journey cargo` verifies native contact pickup, drop, deployment, duplicate
+requests and locked enemy cargo. [Cargo behavior and limits](CARGO.md) records
+the original controls, models, confirmation rules and test coverage.
 
 ## Current scope and gaps
 
@@ -135,7 +141,8 @@ replacement world. Duplicate spawn delivery does not reset controls or cameras.
 Implemented: direct native session/bootstrap, current server quantizer validation,
 world snapshots, team acknowledgement, Tank/Scout deployment, server-driven
 poses/vitals/weapon charge, mouse aiming, supported weapon inputs, two cameras, cockpit radar/map, bounded
-deployment retries, reconnect UI and screenshots. Terrain comes from the same
+deployment retries, cargo pickup/drop/deployment controls and carried models,
+reconnect UI and screenshots. Terrain comes from the same
 grids used by the server. New UI uses Godot's layout/input transforms.
 Vehicle and camera rotation use the same Euler convention as the authoritative
 combat ray. The server negotiates a precise action table with this client; retail
