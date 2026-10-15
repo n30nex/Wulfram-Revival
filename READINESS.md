@@ -4,6 +4,44 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Native lifecycle and full-capacity increment, October 15, 2026
+
+The 0.1.7 candidate and server alpha2.9 add opt-in reliable lifecycle transitions
+and connection/map/vehicle binding. The previous client was reproduced stuck on
+a dead vehicle after one UDP deletion was dropped: it remained attached to
+entity 73 for the full 18-second check. The new path clears that vehicle and
+redeploys at full health. Critical control/metadata uses TCP; movement stays UDP.
+Old inputs, old-world snapshots and previous-connection traffic are rejected.
+Request queues are bounded and processed on the simulation thread; slow control
+writes run separately. Native datagrams remain at most 1200 bytes. Retail and
+earlier native client formats, original physics and media remain unchanged.
+
+The full private lifecycle journey passed in 24.18 seconds with 64 bots: death,
+respawn, old-input replay, Crossroads-to-Mayhem handover, old-map replay,
+same-callsign reconnect and previous-connection replay. Four distinct vehicles
+were deployed. The client rejected three old-world packets and one previous-
+connection packet, retained full health and saw no malformed data. All human
+sessions, UDP peers, player entities and tracked native bodies were removed.
+The private server stopped with no dropped catch-up ticks.
+
+The full-capacity check reached **80 sessions and 16 active human vehicles**:
+15 native peers plus a legacy probe alongside 64 bot participants. All native
+peers saw the full roster, negotiated distinct connection generations and moved
+at least five units. The 35.29-second bounded run reported no malformed packets
+or dropped catch-up ticks and cleaned up all human sessions/UDP peers. Same-host
+connections were admitted sequentially to respect the unchanged four-pending-
+login per-IP guard. This is desktop evidence, not Pi capacity or sustained uptime.
+
+All 133 Python tests pass. Server tests cover bounds, opt-in/authentication, unchanged retail packets,
+request/owner/sequence checks, writer isolation, overflow and fast readiness.
+Native command bodies cannot smuggle additional legacy records past ownership
+validation; action decoding checks the whole body before mutating inputs.
+Cross-language fixtures cover scope encoding, truncated scopes, stale control,
+owner vitals, retry identity, acknowledgements and sequence wraparound. See
+[protocol and test details](client/modern/NATIVE_NETWORK.md). Complete client
+systems, broader network/performance coverage, visual/physical and human approval
+remain open; this is not production certification.
+
 ## Native communications and roster increment, October 15, 2026
 
 The published 0.1.6 preview adds global/team chat, bounded plain-text history in the

@@ -13,6 +13,7 @@ signal roster_changed
 signal reliable_delivered(sequence: int, success: bool)
 
 const Wire = preload("res://wire.gd")
+const NativeWorld = preload("res://native_world.gd")
 const MAX_BUFFER := 262144
 var tcp := StreamPeerTCP.new()
 var udp := PacketPeerUDP.new()
@@ -64,6 +65,12 @@ var _team_retry_at := 0.0
 var _team_deadline := 0.0
 var _pending: Dictionary = {}
 var action_maximum := 1000.0
+var native_lifecycle := false
+var native_generation := 0
+var world_epoch := 0
+var ignored_world_packets := 0
+var _native_sequence := 0
+var _last_tank_tick := -1
 
 func connect_game(host: String, port: int, callsign: String, join_code: String) -> void:
 	disconnect_game()
@@ -99,6 +106,12 @@ func disconnect_game() -> void:
 	_join_code = ""
 	_endpoint = ""
 	_entity_sequences.clear()
+	native_lifecycle = false
+	native_generation = 0
+	world_epoch = 0
+	ignored_world_packets = 0
+	_native_sequence = 0
+	_last_tank_tick = -1
 	_deleted.clear()
 	_last_vitals_sequence = -1
 	_pending.clear()
@@ -130,7 +143,15 @@ static func now() -> float:
 static func stamp() -> int:
 	return Time.get_ticks_msec() & 0x7fffffff
 
+func _scope_outgoing(payload: PackedByteArray) -> PackedByteArray:
+	if not native_lifecycle or payload.is_empty() or payload[0] not in NativeWorld.CLIENT_WORLD:
+		return payload
+	_native_sequence = (_native_sequence + 1) & 0xffffffff
+	var owner := vehicle_id if payload[0] in NativeWorld.CLIENT_OWNER else 0
+	return NativeWorld.encode(payload, world_epoch, owner, _native_sequence, native_generation)
+
 func _send_tcp(payload: PackedByteArray) -> void:
+	payload = _scope_outgoing(payload)
 	if outgoing.size() + payload.size() + 2 > MAX_BUFFER:
 		_fail("The server is not accepting data. Reconnect to try again.")
 		return
@@ -138,6 +159,10 @@ func _send_tcp(payload: PackedByteArray) -> void:
 	outgoing.append_array(payload)
 
 func _send_udp(payload: PackedByteArray) -> void:
+	payload = _scope_outgoing(payload)
+	if payload[0] == NativeWorld.OPCODE and payload[NativeWorld.HEADER_SIZE] not in NativeWorld.ACTION_OPS:
+		_send_tcp(payload)
+		return
 	if udp.is_socket_connected() and udp.put_packet(payload) != OK:
 		_fail("The UDP connection failed. Reconnect to try again.")
 
@@ -181,7 +206,7 @@ func _process(_delta: float) -> void:
 			break
 		var packet := incoming.slice(2, length)
 		incoming = incoming.slice(length)
-		_handle(packet)
+		_handle(packet, true)
 	for index in mini(udp.get_available_packet_count(), 256):
 		var packet := udp.get_packet()
 		if packet.size() >= 3 and ((int(packet[0]) << 8) | packet[1]) == packet.size():
@@ -218,7 +243,9 @@ func _process(_delta: float) -> void:
 			delivery.retry = now() + 0.5
 
 func _send_handshake() -> void:
-	var packet := Wire.new().put(8, 8).text("WulframRevival:actions-v1,combat-v1").put(3, 8).put(_stamp, 32).put(1, 32).put(4, 32)
+	# Both ROOT records share one datagram. Older servers finish on the known
+	# greeting and retain precise actions/combat; newer servers also opt in.
+	var packet := Wire.new().put(8, 8).text(NativeWorld.HELLO).put(8, 8).text("WulframRevival:actions-v1,combat-v1").put(3, 8).put(_stamp, 32).put(1, 32).put(4, 32)
 	var names := ["Unreliable", "Reliable", "Stream 2", "Game Data"]
 	for index in 4:
 		packet.text(names[index]).put(1, 32).put(index, 32)
@@ -227,8 +254,54 @@ func _send_handshake() -> void:
 		packet.put(index, 32).put(1, 32)
 	_send_udp(packet.data)
 
-func _handle(packet: PackedByteArray) -> void:
+func _handle(packet: PackedByteArray, reliable_transport := false) -> void:
 	if packet.is_empty():
+		return
+	if packet[0] in [0x17, 0x22, 0x24, 0x32] and not reliable_transport:
+		ignored_world_packets += 1
+		return
+	var scoped_owner := -1
+	if packet[0] == NativeWorld.OPCODE:
+		var scope := NativeWorld.decode(packet)
+		if scope.is_empty() or scope.sequence != 0:
+			malformed += 1
+			_fail("The server sent an invalid world update.")
+			return
+		packet = scope.payload
+		var op: int = packet[0]
+		if op not in NativeWorld.SERVER_WORLD and op not in NativeWorld.SERVER_UNSCOPED:
+			malformed += 1
+			_fail("The server sent an unsupported world update.")
+			return
+		if (not native_lifecycle and not reliable_transport) or (op in NativeWorld.SERVER_RELIABLE and not reliable_transport):
+			ignored_world_packets += 1
+			return
+		if native_lifecycle and scope.connection != native_generation:
+			ignored_world_packets += 1
+			return
+		if op in NativeWorld.SERVER_UNSCOPED:
+			if scope.epoch != 0:
+				malformed += 1
+				_fail("The server sent invalid player metadata.")
+				return
+		elif op == 0x16:
+			if scope.epoch == 0 or (world_epoch != 0 and not NativeWorld.newer(scope.epoch, world_epoch)):
+				ignored_world_packets += 1
+				return
+			world_epoch = scope.epoch
+		elif world_epoch == 0 or scope.epoch != world_epoch:
+			ignored_world_packets += 1
+			return
+		native_lifecycle = true
+		native_generation = scope.connection
+		scoped_owner = scope.owner
+	elif native_lifecycle and (packet[0] in NativeWorld.SERVER_WORLD or packet[0] in NativeWorld.SERVER_UNSCOPED):
+		ignored_world_packets += 1
+		return
+	# A reconnect has no loaded world yet. Delayed raw packets from the previous
+	# socket must not create vehicles before the new reliable announcement.
+	if (packet[0] == 0x16 and not reliable_transport) or (map_name.is_empty() and packet[0] in NativeWorld.SERVER_WORLD and packet[0] != 0x16):
+		ignored_world_packets += 1
 		return
 	_last_packet = now()
 	var reader := Wire.new(packet)
@@ -349,14 +422,14 @@ func _handle(packet: PackedByteArray) -> void:
 			var has_cargo := reader.take(8) != 0
 			reader.take(8)
 			var item := reader.take(8)
-			if reader.valid and player == player_id:
+			if reader.valid and player == player_id and (scoped_owner < 0 or scoped_owner == vehicle_id):
 				carrying = has_cargo
 				cargo_item = item
 		0x38:
 			reader.take(32)
 			var pad := reader.take(32)
 			var docking := reader.take(8) != 0
-			if reader.valid:
+			if reader.valid and (scoped_owner < 0 or scoped_owner == vehicle_id):
 				docked = docking
 				docking_pad = pad
 		0x0d:
@@ -371,7 +444,11 @@ func _handle(packet: PackedByteArray) -> void:
 			map_name = new_map
 			entities.clear()
 			players_by_entity.clear()
+			for pending_sequence in _pending.keys():
+				reliable_delivered.emit(pending_sequence, false)
 			_pending.clear()
+			_team_requested = 0
+			_last_tank_tick = -1
 			docked = false
 			carrying = false
 			vehicle_id = 0
@@ -396,21 +473,20 @@ func _handle(packet: PackedByteArray) -> void:
 				roster[id].merge(_roster_stats.get(id, {}), true)
 				roster_changed.emit()
 		0x0e, 0x0f:
-			_decode_updates(reader, opcode == 0x0f)
+			_decode_updates(reader, opcode == 0x0f, scoped_owner)
 		0x18:
-			reader.take(32)
+			var tick := reader.take(32)
 			var stats := reader.vitals()
 			var unit := reader.take(32)
 			var id := reader.take(32)
 			var side := reader.take(8)
 			var position := reader.fixed_vector()
 			var rotation := reader.fixed_vector()
-			if reader.valid and unit in [0, 1]:
-				vehicle_id = id
-				team = side
-				_apply_vitals(stats)
-				entities[id] = {"unit": unit, "team": side, "pos": position, "rot": rotation, "health": health}
-				deployed.emit()
+			if reader.valid and unit in [0, 1] and not _older(tick, _last_tank_tick) and not _deleted.has(id):
+				if scoped_owner >= 0 and scoped_owner != id:
+					reader.valid = false
+				else:
+					_accept_tank(id, unit, side, position, rotation, stats, tick)
 		0x15:
 			reader.take(32)
 			for index in reader.take(8):
@@ -426,6 +502,9 @@ func _handle(packet: PackedByteArray) -> void:
 						_deleted.erase(_deleted.keys()[0])
 					if vehicle_id == id:
 						vehicle_id = 0
+						docked = false
+						carrying = false
+						status_changed.emit("Vehicle lost. Choose a friendly repair pad to redeploy.")
 		0x0b:
 			var tick := reader.take(32)
 			if reader.valid:
@@ -436,6 +515,26 @@ func _handle(packet: PackedByteArray) -> void:
 		malformed += 1
 		_fail("The server sent an incomplete or unsupported packet.")
 	changed.emit()
+
+func _accept_tank(id: int, unit: int, side: int, position: Vector3, rotation: Vector3, stats: Dictionary, tick: int) -> void:
+	var is_new := id != vehicle_id
+	_last_tank_tick = tick
+	if is_new or not _older(tick, _last_vitals_sequence):
+		_apply_vitals(stats)
+		_last_vitals_sequence = tick
+	if is_new or not _older(tick, _entity_sequences.get(id, -1)):
+		var item: Dictionary = entities.get(id, {}).duplicate()
+		item.merge({"unit": unit, "team": side, "pos": position, "rot": rotation, "health": stats.get("health", health)}, true)
+		entities[id] = item
+		_entity_sequences[id] = tick
+	vehicle_id = id
+	team = side
+	if is_new:
+		docked = false
+		carrying = false
+		docking_pad = 0
+		cargo_item = 0
+		deployed.emit()
 
 func _apply_vitals(stats: Dictionary) -> void:
 	if not stats.is_empty():
@@ -550,7 +649,7 @@ func _validate_translation(reader: WulfWire) -> void:
 	elif reader.valid:
 		action_maximum = actions[0]
 
-func _decode_updates(reader: WulfWire, view: bool) -> void:
+func _decode_updates(reader: WulfWire, view: bool, scoped_owner := -1) -> void:
 	if view:
 		reader.take(32)
 	var sequence := reader.take(32)
@@ -610,7 +709,7 @@ func _decode_updates(reader: WulfWire, view: bool) -> void:
 			return
 		entities[id] = updates[id]
 		_entity_sequences[id] = sequence
-	if not _older(sequence, _last_vitals_sequence):
+	if (scoped_owner < 0 or scoped_owner == vehicle_id) and not _older(sequence, _last_vitals_sequence):
 		_apply_vitals(stats)
 		_last_vitals_sequence = sequence
 	snapshots += 1
@@ -619,7 +718,7 @@ func _decode_updates(reader: WulfWire, view: bool) -> void:
 		status_changed.emit("Connected. Choose a team and a repair pad.")
 
 static func _older(sequence: int, previous: int) -> bool:
-	return previous >= 0 and sequence < previous and previous - sequence < 0x40000000
+	return previous >= 0 and NativeWorld.newer(previous, sequence)
 
 func choose_team(side: int) -> void:
 	if state != "ready" or side not in [1, 2]:
@@ -671,6 +770,8 @@ func reliable(opcode: int, body: PackedByteArray) -> int:
 	reliable_sequence = (reliable_sequence + 1) & 0xffff
 	var packet := Wire.new().put(opcode, 8).put(reliable_sequence, 16).put(body.size() + 5, 16).data
 	packet.append_array(body)
+	# Retries retain the original map and vehicle, never a later respawn.
+	packet = _scope_outgoing(packet)
 	_pending[reliable_sequence] = {"opcode": opcode, "packet": packet, "retry": now() + 0.5, "deadline": now() + 5.0}
 	_send_udp(packet)
 	return reliable_sequence

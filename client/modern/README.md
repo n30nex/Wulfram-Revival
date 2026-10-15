@@ -95,6 +95,8 @@ server; `--port=PORT` overrides its port. For loopback-only tests the player cod
 can come from `WULFRAM_TEST_JOIN_CODE`; internet hosts ignore that override.
 `--fullscreen`, `--capture-start`, and `--capture-dir=PATH` support local
 display qualification without desktop screenshot tools.
+`--require-lifecycle` makes an online smoke check require the native reliable
+world protocol rather than silently passing on an older server's fallback.
 
 `scripts/check-modern-session.py` runs a bounded native Tank/Scout combat journey
 alongside a legacy protocol probe and 64 bots on a private loopback server. It
@@ -108,6 +110,10 @@ Neither harness substitutes for physical mouse/DPI and human combat qualificatio
 `check_comms.gd` tests the real GUI route at five window sizes, including channel
 popup focus/selection, text entry, input release, 80 roster rows, scrolling and
 plain-text history. Test messages are sent only to the private loopback server.
+`--journey capacity` fills all 16 human places with fifteen native peers and a
+legacy peer alongside 64 bots. `check-modern-lifecycle.py` adds targeted death
+packet loss, respawn, map replacement, stale packet replay and same-callsign
+reconnect checks. See [native lifecycle protocol](NATIVE_NETWORK.md).
 See [combat/audio protocol and checks](COMBAT_AUDIO.md) for the accepted-event
 stream, original sound coverage, silent mixer test and remaining limits.
 
@@ -120,6 +126,11 @@ uses complete server score packets, retains updates that arrive before names,
 and removes departed players. Connection kill/death totals reset on reconnect.
 Player chat does not replace connection/deployment guidance. Unsequenced death
 notices cannot delete a later respawn; full loss/lifecycle qualification remains open.
+New servers bind native traffic to the connection, map and vehicle. Critical
+transitions use the reliable control connection; regular movement remains UDP.
+Older revival servers retain their original lifecycle limits. A map change
+cancels outstanding deployment/command requests instead of applying them to the
+replacement world. Duplicate spawn delivery does not reset controls or cameras.
 
 Implemented: direct native session/bootstrap, current server quantizer validation,
 world snapshots, team acknowledgement, Tank/Scout deployment, server-driven

@@ -61,6 +61,7 @@ var _spawn_retry_at := 0.0
 var _spawn_until := 0.0
 var _smoke := false
 var _combat_smoke := false
+var _require_lifecycle := false
 var _smoke_started := 0.0
 var _first_position := Vector3.ZERO
 var _moved := 0.0
@@ -137,6 +138,7 @@ func _ready() -> void:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	_smoke = "--online-smoke" in args
 	_combat_smoke = _smoke and "--combat-smoke" in args
+	_require_lifecycle = "--require-lifecycle" in args
 	audio.force_quiet = _smoke or "--quiet-test" in args or "--ui-check" in args
 	_smoke_started = Network.now()
 	if "--connect" in args or _smoke:
@@ -571,6 +573,10 @@ func _sync_visuals(delta: float) -> void:
 
 func _load_map(name_value: String) -> void:
 	_map_error = ""
+	_spawn_until = 0.0
+	_spawn_retry_at = 0.0
+	selected_pad = 0
+	_smoke_pads.clear()
 	for visual in visuals.values():
 		visual.queue_free()
 	visuals.clear()
@@ -619,8 +625,8 @@ func _smoke_step() -> void:
 		var position: Vector3 = network.entities[network.vehicle_id].pos
 		_moved = maxf(_moved, position.distance_to(_first_position))
 		if _moved > 3.0 and terrain_loaded and assets_loaded and audio.loaded and feedback.configured and Network.now() - _deployed_at > 3.0:
-			var passed := not _combat_smoke or (feedback.shot_events > 0 and network.firing_packets > 0)
-			print("MODERN_ONLINE " + JSON.stringify({"passed": passed, "map": network.map_name, "entities": network.entities.size(), "snapshots": network.snapshots, "movement": _moved, "malformed": network.malformed, "terrain_loaded": terrain_loaded, "audio_loaded": audio.loaded, "audio_started": audio.started, "feedback_events": feedback.events_played, "shot_events": feedback.shot_events, "firing_packets": network.firing_packets}))
+			var passed := (not _combat_smoke or (feedback.shot_events > 0 and network.firing_packets > 0)) and (not _require_lifecycle or network.native_lifecycle)
+			print("MODERN_ONLINE " + JSON.stringify({"passed": passed, "map": network.map_name, "entities": network.entities.size(), "snapshots": network.snapshots, "movement": _moved, "malformed": network.malformed, "terrain_loaded": terrain_loaded, "audio_loaded": audio.loaded, "audio_started": audio.started, "feedback_events": feedback.events_played, "shot_events": feedback.shot_events, "firing_packets": network.firing_packets, "native_lifecycle": network.native_lifecycle, "world_epoch": network.world_epoch}))
 			_smoke = false
 			_quit_safely(0 if passed else 1)
 			return
@@ -661,6 +667,9 @@ func _capture() -> void:
 		"deployment": deployment_panel.get_global_rect(), "map_rect": map_control.get_global_rect(),
 		"selected_pad": selected_pad, "snapshots": network.snapshots, "fps": Engine.get_frames_per_second()}
 	record["original_models"] = assets.model_cache.size()
+	record["native_lifecycle"] = network.native_lifecycle
+	record["world_epoch"] = network.world_epoch
+	record["ignored_world_packets"] = network.ignored_world_packets
 	record["original_sky"] = original_sky.theme
 	record["original_textures"] = assets.texture_cache.size()
 	record["asset_errors"] = assets.errors

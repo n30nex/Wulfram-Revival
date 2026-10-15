@@ -26,6 +26,7 @@ def main():
     results = report['checks']
     cases = [('import', ['--editor', '--import'], None),
              ('wire', ['--quit-after', '2', '--script', 'res://check.gd'], 'MODERN_WIRE=PASS'),
+             ('native_world', ['--quit-after', '2', '--script', 'res://check_native_world.gd'], 'MODERN_NATIVE_WORLD=PASS'),
              ('original_formats', ['--quit-after', '2', '--script', 'res://check_original_formats.gd'], 'MODERN_ORIGINAL_FORMATS=PASS'),
              ('original_sky', ['--quit-after', '2', '--script', 'res://check_original_sky.gd'], 'MODERN_ORIGINAL_SKY=PASS'),
              ('audio', ['--script', 'res://check_audio.gd'], 'MODERN_AUDIO=PASS'),
