@@ -76,6 +76,12 @@ ARM64 physics:
   Prior downloads and the preserved-client default remain available.
   `production_approved` remains `false`.
 
+Follow-up qualification also fixes a Windows-only test startup race: the
+loopback relay's report could exist while its atomic installation still denied
+reads. The test now waits for readable ready-state data within the same
+five-second bound. A regression injects that transient access error; no server
+or relay runtime behavior is changed.
+
 ## Native lifecycle and full-capacity increment, October 15, 2026
 
 The published 0.1.7 preview and live server alpha2.9 add opt-in reliable lifecycle transitions
