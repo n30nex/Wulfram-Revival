@@ -78,7 +78,7 @@ from wulfram_server.core.entity import (
 )
 from wulfram_server.core.entity_manager import EntityManager
 from wulfram_server.core.map_loader import MapLoader
-from wulfram_server.network.translation_config import get_config_by_index
+from wulfram_server.network.translation_config import get_config_by_index, PRECISE_ACTION_CONFIG, PRECISE_ACTION_HELLO
 
 from wulfram_server.core.land import LandMap
 from wulfram_server.core.native_physics import PhysicsWorldHost
@@ -136,6 +136,8 @@ class ClientSession:
         # Connection State
         self.is_logged_in: bool = False
         self.is_admin: bool = False
+        self.requested_precise_actions: bool = False
+        self.precise_actions: bool = False
         self.login_subcommand: int = 0
         self.supplied_password: str = ""
         self.last_received_at = time.monotonic()
@@ -2093,11 +2095,14 @@ def on_d_handshake(ctx: UdpContext, reader: PacketReader):
 
 @dispatcher.datagram_route(0x08)
 def on_root_hello(ctx: UdpContext, reader: PacketReader):
-    # Client confirms they heard our TCP "UDP Config" packet
-    # This is just a UDP connectivity probe ("Hello There").
-    # It contains no ID, so we cannot link it to a session yet.
+    # The original greeting is a connectivity probe. New clients may request
+    # precise actions after the key echo has linked an authenticated session.
     packet_start = reader.position_bits - 8
-    reader.read_string()
+    greeting = reader.read_string()
+    if ctx.session is not None and getattr(ctx.session, "is_logged_in", False):
+        # This requests a capability; only bootstrap freezes the active format.
+        # Later/reordered greetings cannot change an already advertised table.
+        ctx.session.requested_precise_actions = greeting == PRECISE_ACTION_HELLO
     payload = reader.byte_slice(packet_start)
     ctx.server.logger.log_packet("UDP-RECV (ROOT-HELLO)", payload=payload, show_ascii=True)
 
@@ -2523,7 +2528,7 @@ ACTION_NAMES = {
     12: "Pulse shell",
 }
 
-def _read_action_value(reader: PacketReader, action_id: int) -> float:
+def _read_action_value(reader: PacketReader, action_id: int, precise: bool = False) -> float:
     """
     Reads one action value using the independently recovered packet encoding.
     """
@@ -2531,6 +2536,8 @@ def _read_action_value(reader: PacketReader, action_id: int) -> float:
         raise PacketDecodeError("invalid action channel")
     if action_id >= 8 or action_id == 4:
         return 1.0 if reader.read_bits(1) else 0.0
+    if precise:
+        return reader.read_quantized_float(PRECISE_ACTION_CONFIG)
     if action_id == 5:
         return reader.read_quantized_float(get_config_by_index(10))
     return reader.read_quantized_float(get_config_by_index(11))
@@ -2626,7 +2633,7 @@ def parse_action_packet(ctx: UdpContext, reader: PacketReader, is_dump: bool):
         )
 
     for action_id in action_ids:
-        value = _read_action_value(reader, action_id)
+        value = _read_action_value(reader, action_id, getattr(ctx.session, "precise_actions", False))
         action_values.append((action_id, value))
     reader.align_to_byte(require_zero_padding=True)
 
@@ -3015,7 +3022,10 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
     ))
 
     print("[SEND] TRANSLATION (0x32) - Configuration Compression Table...")
-    ctx.send(TranslationPacket())
+    # Freeze one per-session format and serialize that exact choice. It is
+    # independent of other players and never mutates the process-wide table.
+    ctx.session.precise_actions = bool(getattr(ctx.session, "requested_precise_actions", False))
+    ctx.send(TranslationPacket(precise_actions=ctx.session.precise_actions))
     
     # --- ROSTER SYNC ---
     

@@ -4,6 +4,37 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Native aiming and combat increment, October 15, 2026
+
+The 0.1.1 development candidate adds mouse steering/tilt using the preserved
+keymap coefficients, full vehicle/camera rotation, pulse/piercer/repair controls,
+weapon-charge display and focus/menu input release. Original models and texture
+archives are unchanged. The new per-session action table preserves fine input;
+the default table stays byte-for-byte unchanged for retail and 0.1.0 clients.
+
+Bounded local evidence:
+
+- 114 Python tests pass, including both real handshake paths and rejection of
+  unauthenticated capability requests. Late greetings cannot change the active
+  per-session encoding.
+- Cross-language fixtures match both action formats and reject 4,718 truncated
+  packets. Camera forward vectors agree with the server's combat ray.
+- A 15-second private native-physics match passed with 64 bots, the new client
+  and a simultaneous legacy protocol client. Tank/Scout moved 104.7/124.2 world
+  units; the server observed 48 fine-aim samples and both pulse/piercer projectiles.
+  Repair input reached the server. Zero dropped catch-up ticks were observed;
+  this is a bounded desktop check, not Pi capacity or complete combat approval.
+  Both human connections and UDP peers were removed, and the test server stopped.
+- Actual GTX 1060 rendering plus GUI-event routing passed login, team and map
+  selection at five requested sizes, 800x600 through 3840x2160. Native Windows
+  activation failed during the attempted physical mouse check. These results
+  therefore do not qualify physical mouse capture, desktop DPI or 4K hardware.
+
+The prior published preview record below remains the release reference until
+the exact Actions candidate is packaged, downloaded and checked. This increment
+does not close the original-art parity, audio, prediction, equipment UI or human
+approval gates and must not replace the default preserved-client download.
+
 ## Native Windows development preview, October 15, 2026
 
 The maintainer moved replacement-client development ahead of the first stable

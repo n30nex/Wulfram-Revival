@@ -4,6 +4,7 @@ const Network = preload("res://network.gd")
 const Radar = preload("res://radar.gd")
 const Assets = preload("res://original_assets.gd")
 const Terrain = preload("res://terrain.gd")
+const VehicleInput = preload("res://vehicle_input.gd")
 const SCALE := 0.1
 var network := Network.new()
 var camera := Camera3D.new()
@@ -24,11 +25,17 @@ var status_label := Label.new()
 var telemetry_label := Label.new()
 var health_bar := ProgressBar.new()
 var fuel_bar := ProgressBar.new()
+var charge_bar := ProgressBar.new()
+var charge_label := Label.new()
+var reticle := Label.new()
+var vehicle_input := VehicleInput.new()
+var server_port := 2627
 var map_control: Control
 var terrain_loaded := false
 var selected_pad := 0
 var world_size := Vector2(5600, 5600)
 var _input_at := 0.0
+var _last_input_time := 0.0
 var _refresh_at := 0.0
 var _spawn_retry_at := 0.0
 var _spawn_until := 0.0
@@ -68,6 +75,7 @@ func _ready() -> void:
 	environment_node.environment = environment
 	add_child(environment_node)
 	_build_ui()
+	get_window().focus_exited.connect(func(): _set_menu(true))
 	var asset_path := "res://content/original"
 	if not FileAccess.file_exists(asset_path.path_join("palette0")):
 		asset_path = OS.get_executable_path().get_base_dir().path_join("original")
@@ -82,6 +90,8 @@ func _ready() -> void:
 	for value in args:
 		if value.begins_with("--capture-dir="):
 			_capture_dir = value.trim_prefix("--capture-dir=")
+		elif value.begins_with("--port="):
+			server_port = int(value.trim_prefix("--port="))
 	if "--fullscreen" in args:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	_smoke = "--online-smoke" in args
@@ -90,6 +100,10 @@ func _ready() -> void:
 		for value in args:
 			if value.begins_with("--server="):
 				host_input.text = value.trim_prefix("--server=")
+		# Private integration tests use a disposable local player code. Never
+		# accept this override for an internet host or read an admin credential.
+		if host_input.text in ["127.0.0.1", "::1"] and OS.has_environment("WULFRAM_TEST_JOIN_CODE"):
+			code_input.text = OS.get_environment("WULFRAM_TEST_JOIN_CODE")
 		name_input.text = "ModernCheck" + str(Time.get_unix_time_from_system()).replace(".", "").right(8) if _smoke else "ModernPilot"
 		_connect()
 	if "--ui-check" in args:
@@ -144,7 +158,7 @@ func _build_ui() -> void:
 	ui.add_child(badge)
 	badge.position = Vector2(28, 57)
 	badge.modulate = Color("9eb5c5")
-	var menu_button := _button(ui, "DEPLOYMENT", func(): _menu_open = not _menu_open)
+	var menu_button := _button(ui, "DEPLOYMENT / F1", func(): _set_menu(not _menu_open))
 	menu_button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
 	menu_button.offset_left = -200
 	menu_button.offset_right = -28
@@ -186,6 +200,7 @@ func _build_ui() -> void:
 	vehicle_choice.custom_minimum_size.y = 36
 	deployment.add_child(vehicle_choice)
 	deploy_button = _button(deployment, "DEPLOY", _request_spawn)
+	_button(deployment, "RESUME / F1", func(): _set_menu(false))
 	_button(deployment, "DISCONNECT", func(): network.disconnect_game(); status_label.text = "Disconnected.")
 	var footer := HBoxContainer.new()
 	ui.add_child(footer)
@@ -211,6 +226,14 @@ func _build_ui() -> void:
 		pair[1].custom_minimum_size = Vector2(100, 16)
 		pair[1].show_percentage = false
 		box.add_child(pair[1])
+	var charge_box := VBoxContainer.new()
+	charge_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	meters.add_child(charge_box)
+	charge_label.add_theme_font_size_override("font_size", 12)
+	charge_box.add_child(charge_label)
+	charge_bar.custom_minimum_size = Vector2(100, 16)
+	charge_bar.show_percentage = false
+	charge_box.add_child(charge_bar)
 	status_label.text = "Connect to join the public battlefield."
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -223,16 +246,15 @@ func _build_ui() -> void:
 	map_control.custom_minimum_size.x = 236
 	map_control.pad_selected.connect(func(id: int): selected_pad = id; _refresh_pads())
 	footer.add_child(map_control)
-	var reticle := _label("+", 28)
+	reticle.text = "+"
+	reticle.add_theme_font_size_override("font_size", 28)
 	ui.add_child(reticle)
-	reticle.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	reticle.offset_top = -70
 	reticle.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func _connect() -> void:
 	_spawn_until = 0.0
 	selected_pad = 0
-	network.connect_game(host_input.text.strip_edges(), 2627, name_input.text.strip_edges(), code_input.text)
+	network.connect_game(host_input.text.strip_edges(), server_port, name_input.text.strip_edges(), code_input.text)
 
 func _refresh_pads() -> void:
 	pad_choice.clear()
@@ -258,10 +280,15 @@ func _request_spawn() -> void:
 
 func _on_deployed() -> void:
 	_spawn_until = 0.0
-	_menu_open = false
+	vehicle_input.reset()
+	var unit: int = network.entities[network.vehicle_id].unit
+	if network.vehicle_settings.size() > unit:
+		vehicle_input.jet = network.vehicle_settings[unit].jet_start
+	_set_menu(not get_window().has_focus() and not _smoke)
 	_deployed_at = Network.now()
+	_last_input_time = _deployed_at
 	_first_position = network.entities[network.vehicle_id].pos
-	status_label.text = "W/S move · A/D strafe · Q/E turn · Space jump · Left mouse fire · F2 camera · F12 screenshot"
+	status_label.text = "Mouse aim · Left fire · Right/1 pulse or repair · 2 piercer · Space jump · F1 menu · F2 view"
 	print("MODERN_DEPLOYED team=%d vehicle=%d" % [network.team, network.entities[network.vehicle_id].unit])
 	if "--capture-deployment" in OS.get_cmdline_user_args():
 		get_tree().create_timer(1.0).timeout.connect(_capture)
@@ -271,6 +298,12 @@ func _process(delta: float) -> void:
 	deployment_panel.visible = network.state == "ready" and (network.vehicle_id == 0 or _menu_open)
 	health_bar.value = network.health * 100.0
 	fuel_bar.value = network.fuel * 100.0
+	charge_bar.value = (network.repair_charge if network.weapon_table == 1 else network.pulse_charge) * 100.0
+	charge_label.text = "REPAIR" if network.weapon_table == 1 else "PULSE"
+	reticle.visible = network.vehicle_id != 0 and not _menu_open
+	if network.vehicle_id == 0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		vehicle_input.clear_motion()
 	telemetry_label.text = "%s  /  %s  /  %d ms  /  %d objects" % [network.map_name.to_upper(), network.state.to_upper(), network.ping_ms, network.entities.size()]
 	if Network.now() >= _refresh_at:
 		_refresh_pads()
@@ -284,20 +317,52 @@ func _process(delta: float) -> void:
 		status_label.text = "That pad remains blocked. Choose another friendly pad and retry."
 	if Network.now() >= _input_at and network.vehicle_id != 0:
 		_input_at = Network.now() + 0.04
-		var focused := get_window().has_focus() and not _smoke and not _menu_open
+		var focused := _driving()
 		var forward := float(Input.is_physical_key_pressed(KEY_W)) - float(Input.is_physical_key_pressed(KEY_S)) if focused else 0.0
 		var turn := float(Input.is_physical_key_pressed(KEY_E)) - float(Input.is_physical_key_pressed(KEY_Q)) if focused else 0.0
+		turn *= 1.0 if Input.is_physical_key_pressed(KEY_SHIFT) else 0.6
 		var strafe := float(Input.is_physical_key_pressed(KEY_D)) - float(Input.is_physical_key_pressed(KEY_A)) if focused else 0.0
-		var fire := focused and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and get_viewport().gui_get_hovered_control() == null
-		network.controls(0.7 if _smoke else forward, turn, strafe, fire, focused and Input.is_physical_key_pressed(KEY_SPACE))
+		var aim := vehicle_input.sample(Network.now() - _last_input_time, turn)
+		_last_input_time = Network.now()
+		var fire := focused and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+		var secondary := focused and (Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) or Input.is_physical_key_pressed(KEY_1))
+		var scout := network.weapon_table == 1
+		network.controls(0.7 if _smoke else forward, aim.turn if focused else 0.0, strafe, fire,
+			focused and Input.is_physical_key_pressed(KEY_SPACE), aim.tilt, aim.jet,
+			secondary and not scout, focused and scout and (secondary or Input.is_physical_key_pressed(KEY_R)),
+			focused and not scout and Input.is_physical_key_pressed(KEY_2))
 	if _smoke:
 		_smoke_step()
+
+func _driving() -> bool:
+	return network.vehicle_id != 0 and get_window().has_focus() and not _smoke and not _menu_open and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+
+func _set_menu(open: bool) -> void:
+	_menu_open = open
+	vehicle_input.clear_motion()
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if not open and network.vehicle_id != 0 and get_window().has_focus() and not _smoke else Input.MOUSE_MODE_VISIBLE
+	# Release weapons immediately, without cutting hover power or changing aim.
+	if open:
+		network.controls(0.0, 0.0, 0.0, false, false, vehicle_input.tilt, vehicle_input.jet)
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion and _driving():
+		vehicle_input.mouse_motion(event.screen_relative)
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.pressed and _driving():
+		if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			var minimum := 0.0
+			var unit: int = network.entities.get(network.vehicle_id, {}).get("unit", 0)
+			if network.vehicle_settings.size() > unit:
+				minimum = network.vehicle_settings[unit].jet_minimum
+			vehicle_input.jet = clampf(vehicle_input.jet + (0.05 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -0.05), minimum, 1.0)
+			get_viewport().set_input_as_handled()
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not event.is_pressed() or event.is_echo():
 		return
-	if event.keycode == KEY_ESCAPE:
-		_menu_open = not _menu_open
+	if event.keycode in [KEY_ESCAPE, KEY_F1]:
+		_set_menu(not _menu_open)
 		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_F2:
 		_first_person = not _first_person
@@ -336,16 +401,19 @@ func _sync_visuals(delta: float) -> void:
 		var target: Vector3 = world_position(item.pos)
 		visuals[id].position = visuals[id].position.lerp(target, 1.0 - exp(-18.0 * delta))
 		if item.has("rot"):
-			visuals[id].rotation.y = lerp_angle(visuals[id].rotation.y, item.rot.z, 1.0 - exp(-18.0 * delta))
+			visuals[id].basis = Basis(visuals[id].basis.get_rotation_quaternion().slerp(VehicleInput.world_basis(item.rot).get_rotation_quaternion(), 1.0 - exp(-18.0 * delta)))
 	if network.entities.has(network.vehicle_id) and visuals.has(network.vehicle_id):
 		var item: Dictionary = network.entities[network.vehicle_id]
 		var target: Vector3 = visuals[network.vehicle_id].position
-		var yaw: float = item.get("rot", Vector3.ZERO).z
-		var direction := Vector3(cos(yaw), 0, -sin(yaw))
+		var orientation: Basis = visuals[network.vehicle_id].basis
+		var direction := orientation * Vector3.RIGHT
 		var original: Dictionary = assets.model(Assets.model_name(item.unit, item.team))
 		var eye: Vector3 = original.get("attachments", {}).get("eye", Vector3.ZERO)
-		camera.position = target + Basis(Vector3.UP, yaw) * eye if _first_person else target - direction * 7.5 + Vector3.UP * 3.8
-		camera.look_at(target + direction * 12 + Vector3.UP * 0.6)
+		camera.position = target + orientation * eye if _first_person else target - direction * 7.5 + Vector3.UP * 3.8
+		camera.look_at(camera.position + direction if _first_person else target + direction * 12, orientation * Vector3.UP)
+		var aim_point := target + direction * 100.0
+		if not camera.is_position_behind(aim_point):
+			reticle.position = camera.unproject_position(aim_point) - reticle.size * 0.5
 		visuals[network.vehicle_id].visible = not _first_person
 
 func _load_map(name_value: String) -> void:
@@ -426,6 +494,13 @@ func _capture() -> void:
 	record["movement_packets"] = network.movement_packets
 	record["firing_packets"] = network.firing_packets
 	record["position"] = network.entities.get(network.vehicle_id, {}).get("pos", Vector3.ZERO)
+	record["rotation"] = network.entities.get(network.vehicle_id, {}).get("rot", Vector3.ZERO)
+	record["aim_tilt"] = vehicle_input.tilt
+	record["jet"] = vehicle_input.jet
+	record["mouse_captured"] = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	record["action_maximum"] = network.action_maximum
+	record["pulse_charge"] = network.pulse_charge
+	record["repair_charge"] = network.repair_charge
 	var file := FileAccess.open(path + ".json", FileAccess.WRITE)
 	if file:
 		file.store_string(JSON.stringify(record, "  "))

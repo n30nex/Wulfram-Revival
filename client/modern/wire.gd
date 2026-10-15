@@ -71,10 +71,11 @@ func vitals() -> Dictionary:
 		valid = false
 		return {}
 	var result := {"health": scalar(10, 1.0, 1.0), "fuel": scalar(10, 1.0, 1.0)}
-	take([3, 2, 0, 1][table])
+	result["weapon_table"] = table
+	result["weapon_mask"] = take([3, 2, 0, 1][table])
 	if table < 2:
-		take(8)
+		result["pulse_charge" if table == 0 else "repair_charge"] = scalar(8, 1.0, 1.0)
 	return result
 
-static func encoded_scalar(value: float) -> int:
-	return 0 if value == 0.0 else int((1000.0 - clampf(value, -1000.0, 1000.0)) * 65534.0 / 2000.0) + 1
+static func encoded_scalar(value: float, maximum := 1000.0) -> int:
+	return 0 if value == 0.0 else int((maximum - clampf(value, -maximum, maximum)) * 65534.0 / (2.0 * maximum)) + 1

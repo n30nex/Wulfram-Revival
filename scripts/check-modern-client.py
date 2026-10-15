@@ -20,7 +20,8 @@ def main():
     results = []
     cases = [('import', ['--editor', '--import'], None),
              ('wire', ['--script', 'res://check.gd'], 'MODERN_WIRE=PASS'),
-             ('layout', ['--', '--ui-check'], 'MODERN_UI_LAYOUT=PASS')]
+             ('layout', ['--', '--ui-check'], 'MODERN_UI_LAYOUT=PASS'),
+             ('input', ['--script', 'res://check_input.gd'], 'MODERN_INPUT=PASS')]
     for name, options, marker in cases:
         started = time.monotonic()
         run = subprocess.run([str(args.godot.resolve()), '--headless', '--path', str(project),
