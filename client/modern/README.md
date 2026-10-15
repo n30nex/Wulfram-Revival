@@ -26,6 +26,9 @@ The client retries a busy pad for up to 20 seconds; choose another if it stays b
 - F1 or Resume: return to captured mouse control. Losing focus opens the menu
   and releases weapons while retaining hover strength and vehicle tilt.
 - Disconnect returns to the connection screen without restarting.
+- Sound volume and background muting are available on the connection/deployment
+  panels. The complete package includes original audio; extracting only the EXE
+  and PCK is insufficient.
 
 Screenshots go in Godot's application user-data `screenshots` folder. The native
 renderer captures both UI and world and saves a small diagnostic JSON beside it.
@@ -53,6 +56,10 @@ also be included when assembling a playable distribution.
 The original-asset importer copies the original archives verbatim and records
 their hashes. The native loader reads the original visual meshes (not collision
 substitutes), UVs, attachment points, palette pixels and stored mip levels.
+It also copies the exact final members of duplicate archive names into `resolved`:
+Godot's ZIP reader otherwise returns earlier textures instead of the appended
+replacement art. Original archive bytes remain unchanged. Original sound files
+and their catalogue are copied to `original/audio`.
 No replacement or AI-generated models/textures are used. All 39 visual models
 and their 175 referenced textures pass the local archive check.
 The original cockpit stripmap supplies the frame, with proportional radar/map
@@ -87,6 +94,8 @@ fine aiming, actual pulse/piercer creation, movement, repair input, reliable com
 acknowledgement and disconnect cleanup. `check_input.gd` sends window-coordinate
 events through Godot's real GUI route; a GPU run also checks tactical-map selection.
 Neither harness substitutes for physical mouse/DPI and human combat qualification.
+See [combat/audio protocol and checks](COMBAT_AUDIO.md) for the accepted-event
+stream, original sound coverage, silent mixer test and remaining limits.
 
 ## Current scope and gaps
 
@@ -104,7 +113,8 @@ The maintainer requires the original models and textures to look exactly like
 the original. The loader preserves those assets, while full appearance parity
 is still under qualification. Terrain uses original bitmaps, family mask banks
 and stored mips; runtime random-variant selection, skies, decorative assets and
-exact lighting/effect/UI presentation still need comparison. Sound,
+exact lighting/effect/UI presentation still need comparison. Original sound and
+accepted combat feedback are implemented; physical sound/mix approval,
 physical aiming/handling approval, complete weapon/equipment interfaces,
 prediction/reconciliation, full loss/reordering/map/death tests, accessibility,
 GPU/DPI coverage and human playtests are not qualified. No claim of production

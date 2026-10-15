@@ -78,7 +78,7 @@ from wulfram_server.core.entity import (
 )
 from wulfram_server.core.entity_manager import EntityManager
 from wulfram_server.core.map_loader import MapLoader
-from wulfram_server.network.translation_config import get_config_by_index, PRECISE_ACTION_CONFIG, PRECISE_ACTION_HELLO
+from wulfram_server.network.translation_config import get_config_by_index, PRECISE_ACTION_CONFIG, PRECISE_ACTION_HELLO, COMBAT_EVENT_HELLO
 
 from wulfram_server.core.land import LandMap
 from wulfram_server.core.native_physics import PhysicsWorldHost
@@ -138,6 +138,8 @@ class ClientSession:
         self.is_admin: bool = False
         self.requested_precise_actions: bool = False
         self.precise_actions: bool = False
+        self.requested_combat_events: bool = False
+        self.combat_events: bool = False
         self.login_subcommand: int = 0
         self.supplied_password: str = ""
         self.last_received_at = time.monotonic()
@@ -1202,12 +1204,17 @@ def _destroy_authoritative_entity(
             # until the presentation system is reset. Transient 0x27 is the
             # client's dedicated positional explosion path; its entity type
             # selects the matching shell presentation without that light.
-            broadcast(server, TransientArrayPacket([
+            legacy = TransientArrayPacket([
                 ExplosionTransient(
                     position=tuple(entity.pos),
                     entity_type=entity.unit_type,
                 ),
-            ]))
+            ]).serialize()
+            kind = 0x122 if entity.unit_type == FLAK_SHELL_UNIT_TYPE else 0x121 if entity.projectile_kind == 'piercer' else 0x120
+            modern = TransientArrayPacket([PositionalTransient(kind, tuple(entity.pos), entity.net_id)]).serialize()
+            for recipient in tuple(server.sessions):
+                if recipient.is_logged_in and recipient.is_ready_for_updates and recipient.udp_context is not None:
+                    recipient.udp_context.send(modern if getattr(recipient, 'combat_events', False) else legacy)
             delete_explosion = False
 
     owner_session = next(
@@ -1587,28 +1594,40 @@ def _broadcast_pending_transients(server: WulframServerContext) -> None:
             session.udp_context.send(b'\x0F' + payload)
             owner.pending_view_mask &= ~jump_motion_mask
 
-    events = []
+    events, legacy_events = [], []
     for entity in sources:
         for pending in entity.pending_transient_events:
             if pending.position is not None:
-                events.append(PositionalTransient(
+                event = PositionalTransient(
                     event_type=pending.event_type,
                     position=pending.position,
-                ))
+                    secondary_id=pending.secondary_id,
+                )
             elif pending.entity_id is not None:
-                events.append(EntityTransient(
+                event = EntityTransient(
                     event_type=pending.event_type,
                     entity_id=pending.entity_id,
-                ))
-    for start in range(0, len(events), 0xFF):
-        packet = TransientArrayPacket(tuple(events[start:start + 0xFF]))
-        for session in server.sessions:
-            if (
-                session.is_logged_in
-                and session.is_ready_for_updates
-                and session.udp_context is not None
-            ):
-                session.udp_context.send(packet)
+                    secondary_id=pending.secondary_id,
+                )
+            events.append(event)
+            if not pending.modern_only:
+                legacy_events.append(event)
+    # Cache once per advertised capability; old clients never receive extensions.
+    packets = {}
+    for session in tuple(server.sessions):
+        if (not session.is_logged_in or not session.is_ready_for_updates
+                or session.udp_context is None):
+            continue
+        modern = bool(getattr(session, 'combat_events', False))
+        if modern not in packets:
+            selected = events if modern else legacy_events
+            # Extended positional events take at most 92 bits. Keep the new
+            # stream below 1200 bytes instead of fragmenting busy-match UDP.
+            batch = 96 if modern else 0xFF
+            packets[modern] = [TransientArrayPacket(tuple(selected[start:start+batch])).serialize()
+                               for start in range(0, len(selected), batch)]
+        for packet in packets[modern]:
+            session.udp_context.send(packet)
 
     for entity in sources:
         entity.pending_transient_events.clear()
@@ -2102,7 +2121,8 @@ def on_root_hello(ctx: UdpContext, reader: PacketReader):
     if ctx.session is not None and getattr(ctx.session, "is_logged_in", False):
         # This requests a capability; only bootstrap freezes the active format.
         # Later/reordered greetings cannot change an already advertised table.
-        ctx.session.requested_precise_actions = greeting == PRECISE_ACTION_HELLO
+        ctx.session.requested_precise_actions = greeting in (PRECISE_ACTION_HELLO, COMBAT_EVENT_HELLO)
+        ctx.session.requested_combat_events = greeting == COMBAT_EVENT_HELLO
     payload = reader.byte_slice(packet_start)
     ctx.server.logger.log_packet("UDP-RECV (ROOT-HELLO)", payload=payload, show_ascii=True)
 
@@ -3025,6 +3045,7 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
     # Freeze one per-session format and serialize that exact choice. It is
     # independent of other players and never mutates the process-wide table.
     ctx.session.precise_actions = bool(getattr(ctx.session, "requested_precise_actions", False))
+    ctx.session.combat_events = bool(getattr(ctx.session, "requested_combat_events", False))
     ctx.send(TranslationPacket(precise_actions=ctx.session.precise_actions))
     
     # --- ROSTER SYNC ---

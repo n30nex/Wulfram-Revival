@@ -23,6 +23,8 @@ func _init() -> void:
 	network._handle(fixture.transients.hex_decode())
 	assert(events.size() == 3 and events[0].entity == 42 and events[2].unit == 6)
 	assert(events[1].pos.distance_to(Vector3(100, -200, 10)) < 2.0)
+	network._handle(fixture.combat_events.hex_decode())
+	assert(events.size() == 6 and events[3].type == 0x100 and events[3].secondary == 7 and events[5].secondary == 42)
 	network._handle(fixture.snapshot.hex_decode())
 	assert(network.entities.size() == 6)
 	assert(network.entities[100].pos.distance_to(Vector3(100.5, -200.25, 8.75)) < 0.5)
@@ -55,7 +57,7 @@ func _init() -> void:
 	assert(network.send_chat("invalid\ntext") == -1)
 	network.free()
 	var truncated_checks := 0
-	for name in ["snapshot", "tank", "translation", "message", "behavior", "transients"]:
+	for name in ["snapshot", "tank", "translation", "message", "behavior", "transients", "combat_events"]:
 		var bytes: PackedByteArray = fixture[name].hex_decode()
 		for size_value in range(1, bytes.size()):
 			var broken := Network.new()

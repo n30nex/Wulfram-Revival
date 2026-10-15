@@ -18,7 +18,7 @@ from wulfram_server.network.streams import PacketReader, PacketWriter
 from wulfram_server.network.transport.tcp_transport import TcpTransport
 from wulfram_server.network.transport.udp_transport import UdpTransport
 from wulfram_server.network.packets.translation import TranslationPacket
-from wulfram_server.network.translation_config import PRECISE_ACTION_HELLO
+from wulfram_server.network.translation_config import PRECISE_ACTION_HELLO, COMBAT_EVENT_HELLO
 
 
 class NetworkTestHooks(ServerHooks):
@@ -41,7 +41,10 @@ class BotHandshakeTests(unittest.TestCase):
     def test_precise_action_bootstrap_and_late_hello_cannot_switch_encoding(self):
         self.check_bootstrap(True)
 
-    def check_bootstrap(self, precise):
+    def test_combat_events_are_opt_in_and_frozen_at_bootstrap(self):
+        self.check_bootstrap(True, combat_events=True)
+
+    def check_bootstrap(self, precise, combat_events=False):
         config = Config()
         config = replace(config, network=replace(config.network, host="127.0.0.1", server_ip="127.0.0.1"))
         hooks = NetworkTestHooks()
@@ -125,7 +128,7 @@ class BotHandshakeTests(unittest.TestCase):
             # fresh TCP connection or duplicate authentication side effects.
             self.assertEqual(udp_client.recv(65535), b"\x13\x03")
             root = PacketWriter()
-            root.write_string(PRECISE_ACTION_HELLO if precise else "Hello There")
+            root.write_string(COMBAT_EVENT_HELLO if combat_events else PRECISE_ACTION_HELLO if precise else "Hello There")
             dispatch_udp(b"\x08" + root.get_bytes() + b"\x03" + struct.pack(">IIII", 123, 1, 0, 0))
             replies = [udp_client.recv(65535)[0] for _ in range(4)]
             self.assertEqual(replies, [0x02, 0x03, 0x04, 0x04])
@@ -142,10 +145,12 @@ class BotHandshakeTests(unittest.TestCase):
             table = next(payload for payload in packets if payload[0] == 0x32)
             self.assertEqual(table, TranslationPacket(precise_actions=precise).serialize())
             self.assertEqual(session.precise_actions, precise)
+            self.assertEqual(session.combat_events, combat_events)
             late = PacketWriter()
             late.write_string("Hello There" if precise else PRECISE_ACTION_HELLO)
             dispatch_udp(b'\x08' + late.get_bytes())
             self.assertEqual(session.precise_actions, precise)
+            self.assertEqual(session.combat_events, combat_events)
             roster = [payload for payload in packets if payload[0] == 0x1A]
             self.assertEqual(len(roster), 5)
             for bot in server.bots.bots:

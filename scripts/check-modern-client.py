@@ -27,6 +27,7 @@ def main():
     cases = [('import', ['--editor', '--import'], None),
              ('wire', ['--quit-after', '2', '--script', 'res://check.gd'], 'MODERN_WIRE=PASS'),
              ('original_formats', ['--quit-after', '2', '--script', 'res://check_original_formats.gd'], 'MODERN_ORIGINAL_FORMATS=PASS'),
+             ('audio', ['--script', 'res://check_audio.gd'], 'MODERN_AUDIO=PASS'),
              ('layout', ['--', '--ui-check'], 'MODERN_UI_LAYOUT=PASS'),
              ('input', ['--script', 'res://check_input.gd'], 'MODERN_INPUT=PASS')]
     for name, options, marker in cases:
@@ -42,7 +43,8 @@ def main():
             save_report()
             raise SystemExit(f'Modern client {name} check timed out.') from None
         log = run.stdout + run.stderr
-        passed = run.returncode == 0 and 'ERROR:' not in log and (marker is None or marker in log)
+        passed = (run.returncode == 0 and 'ERROR:' not in log and 'ObjectDB instances were leaked' not in log
+                  and (marker is None or marker in log))
         results.append({'name': name, 'passed': passed, 'seconds': round(time.monotonic()-started, 3)})
         save_report()
         print(log.strip())

@@ -30,6 +30,7 @@ func _button(node: Node, text_value: String) -> Button:
 func _run() -> void:
 	var game := Main.new()
 	root.add_child(game)
+	game.audio.force_quiet = true
 	game.set_process(false)
 	game.network.set_process(false)
 	var cases := 0
@@ -70,6 +71,8 @@ func _run() -> void:
 		cases += 1
 	print("MODERN_INPUT=PASS sizes=%d physical_mouse_qualified=false" % cases)
 	game.network.disconnect_game()
+	game.feedback.reset()
+	await create_timer(.08).timeout
 	game.queue_free()
 	await process_frame
 	quit()

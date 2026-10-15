@@ -38,7 +38,7 @@ class InputSample:
 
 @dataclass(frozen=True, slots=True)
 class PendingTransientEvent:
-    """One client presentation event awaiting a reliable broadcast attempt."""
+    """One client presentation event awaiting a broadcast attempt."""
 
     event_type: int
     position: tuple[float, float, float] | None = None
@@ -46,6 +46,8 @@ class PendingTransientEvent:
     # Jump needs an immediate soft owner correction before its sound. Docking
     # must not send one because a soft pose update wakes the sleeping body.
     requires_owner_motion_update: bool = False
+    secondary_id: int | None = None
+    modern_only: bool = False
 
     def __post_init__(self) -> None:
         if (self.position is None) == (self.entity_id is None):

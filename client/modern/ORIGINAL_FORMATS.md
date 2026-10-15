@@ -5,6 +5,23 @@ Reference executable: Wulfram II 2.1.5B, SHA-256
 The following describes recovered file/renderer behavior; the executable and
 original artwork are not included in this repository.
 
+## Appended replacement bitmap members
+
+The archives contain repeated names, including case aliases and appended
+replacement images. Godot's ZIP reader can return an earlier entry: for example,
+the first `p2Rlanding1` is grey while the later record is the gold pad artwork;
+`gunblast_front1` also has an older 64x64 entry and a later transparent 128x128
+entry. Import the final member bytes to `resolved/<archive>/<lowercase name>`
+without rewriting the original archive. The manifest records both source member
+and exact digest. Runtime refuses incomplete replacement data.
+
+The independent source hashes used by the local archive check are
+`54e225d8858282549a5fb7c62030b05d17b5aebe5699de5d7c8c5c4d3023b4a5`
+for the final `p2Rlanding1`, and
+`8c52a49c86a90230a080d78386a56c1753f97d22d9375bfd93b0e08257469b7a`
+for the final `gunblast_front1`. No recoloring, upscaling or audio transcoding is
+performed; source archives and selected members remain byte-identical.
+
 ## Model exterior faces
 
 The original visual meshes wind exterior faces counter-clockwise. The coordinate

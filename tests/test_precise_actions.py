@@ -8,7 +8,7 @@ from unittest.mock import Mock
 from wulfram_server import application as app
 from wulfram_server.network.streams import PacketReader, PacketWriter
 from wulfram_server.network.packets.translation import TranslationPacket
-from wulfram_server.network.translation_config import GLOBAL_CONFIGS, PRECISE_ACTION_CONFIG, PRECISE_ACTION_HELLO
+from wulfram_server.network.translation_config import GLOBAL_CONFIGS, PRECISE_ACTION_CONFIG, PRECISE_ACTION_HELLO, COMBAT_EVENT_HELLO
 
 
 class PreciseActionsTests(unittest.TestCase):
@@ -30,16 +30,18 @@ class PreciseActionsTests(unittest.TestCase):
                     self.assertAlmostEqual(actual, value, delta=2 / 65534)
 
     def test_unauthenticated_and_unlinked_greetings_do_not_negotiate(self):
-        writer = PacketWriter()
-        writer.write_string(PRECISE_ACTION_HELLO)
-        for session in (None, SimpleNamespace(is_logged_in=False, requested_precise_actions=False)):
-            context = SimpleNamespace(session=session, server=SimpleNamespace(logger=Mock()))
-            # The route is normally called with the opcode already consumed.
-            reader = PacketReader(b'\x08' + writer.get_bytes())
-            reader.read_byte()
-            app.on_root_hello(context, reader)
-            if session is not None:
-                self.assertFalse(session.requested_precise_actions)
+        for greeting in (PRECISE_ACTION_HELLO, COMBAT_EVENT_HELLO):
+            writer = PacketWriter()
+            writer.write_string(greeting)
+            for session in (None, SimpleNamespace(is_logged_in=False, requested_precise_actions=False, requested_combat_events=False)):
+                context = SimpleNamespace(session=session, server=SimpleNamespace(logger=Mock()))
+                # The route is normally called with the opcode already consumed.
+                reader = PacketReader(b'\x08' + writer.get_bytes())
+                reader.read_byte()
+                app.on_root_hello(context, reader)
+                if session is not None:
+                    self.assertFalse(session.requested_precise_actions)
+                    self.assertFalse(session.requested_combat_events)
 
 
 if __name__ == '__main__':

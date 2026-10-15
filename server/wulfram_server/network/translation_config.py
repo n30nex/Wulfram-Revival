@@ -191,6 +191,7 @@ COMPRESSOR_STAT = _make(GLOBAL_CONFIGS[5]) # Health/Energy
 # Opt-in only. The historical +/-1000 action range loses small aiming inputs;
 # old clients (including the first native preview) retain their advertised table.
 PRECISE_ACTION_HELLO = "WulframRevival:actions-v1"
+COMBAT_EVENT_HELLO = "WulframRevival:actions-v1,combat-v1"
 PRECISE_ACTION_TRANSLATION = {"head": 16, "total": 0, "max": "1.0", "range": "2.0"}
 PRECISE_ACTION_CONFIG = _make(PRECISE_ACTION_TRANSLATION)
 
