@@ -498,6 +498,8 @@ def _complete_map_change(server: Any, transition: MapChangeTransition) -> None:
     if transition.state_text is not None:
         MapLoader(server.entities).load_from_string(transition.state_text)
     server.first_map_load = True
+    previous_epoch = getattr(server, 'world_identity', (1, map_name))[0]
+    server.world_identity = (((previous_epoch+1) & 0xFFFFFFFF) or 1, map_name)
     server.map_change_transition = None
     server.match_state = MatchState()
     from wulfram_server.matches import reset_round

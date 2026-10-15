@@ -6,6 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 import ipaddress
 import math
+import queue
 from pathlib import Path
 import secrets
 import select
@@ -50,6 +51,7 @@ from wulfram_server.network.transport.tcp_transport import TcpTransport
 from wulfram_server.network.transport.udp_transport import UdpTransport
 from wulfram_server.network.transport.envelope import UdpEnvelope
 from wulfram_server.network.limits import RateLimit
+from wulfram_server.network import native_world
 
 from wulfram_server.network.dispatcher import PacketDispatcher
 from wulfram_server.network.streams import PacketDecodeError, PacketWriter, PacketReader
@@ -140,6 +142,15 @@ class ClientSession:
         self.precise_actions: bool = False
         self.requested_combat_events: bool = False
         self.combat_events: bool = False
+        self.requested_lifecycle = False
+        self.native_lifecycle = False
+        self.native_generation = secrets.randbits(63) or 1
+        self.native_announced_epoch = 0
+        self.native_control = deque()
+        self.native_control_lock = threading.Lock()
+        self.native_control_event = threading.Event()
+        self.native_requests = queue.Queue(maxsize=64)
+        self.native_action_sequence = None
         self.login_subcommand: int = 0
         self.supplied_password: str = ""
         self.last_received_at = time.monotonic()
@@ -203,6 +214,7 @@ class ClientSession:
         self._cleaned_up = True
         self.stop_ping_event.set()
         self.world_change_event.set()
+        self.native_control_event.set()
         self.spawn_delivery = None
         was_logged_in = self.is_logged_in
         self.is_logged_in = False
@@ -239,6 +251,7 @@ class ClientSession:
         """Wake the owning TCP worker; it performs cleanup exactly once."""
         self.stop_ping_event.set()
         self.world_change_event.set()
+        self.native_control_event.set()
         self.spawn_delivery = None
         for event in (self.key_echoed_event, self.login_received, self.d_handshake_ack_event):
             event.set()
@@ -277,6 +290,7 @@ class WulframServerContext:
         self.entities = EntityManager()
         self.first_map_load = False
         self.current_map_name = self.cfg.game.map_name
+        self.world_identity = (1, self.current_map_name)
         self.land = LandMap()
 
         self.hooks.initialize_server(self)
@@ -344,6 +358,9 @@ class WulframServerContext:
             return opcode in ((0x08, 0x13) if context.transport_name == "UDP" else (0x13, 0x21, 0x4E))
         if opcode == 0x21:  # A second LOGIN cannot rename an authenticated player.
             return False
+        if (getattr(session, 'native_lifecycle', False) and opcode in native_world.CLIENT_WORLD
+                and native_world.dispatch_session.get() is not session):
+            return False
         if opcode in (0x03, 0x13, 0x36, 0x4E, 0x4F) and not session.request_rate.allow(opcode):
             return False
         if opcode in (0x09, 0x0A, 0x19, 0x20, 0x25, 0x2B, 0x3A) and not session.is_ready_for_updates:
@@ -379,7 +396,11 @@ class WulframServerContext:
         elif ctx.session is None or not ctx.session.udp_rate.allow():
             return
         stripped = UdpEnvelope.try_strip_length(data)
-        packet_payloads = dispatcher.dispatch_datagram(ctx, stripped)
+        epoch_token = native_world.dispatch_epoch.set(self.world_identity[0])
+        try:
+            packet_payloads = dispatcher.dispatch_datagram(ctx, stripped)
+        finally:
+            native_world.dispatch_epoch.reset(epoch_token)
         if ctx.session is not None:
             ctx.session.last_received_at = time.monotonic()
         self.trace.udp_datagram("client_to_server", data, addr=addr,
@@ -605,6 +626,84 @@ class WulframServerContext:
                 if session in self.sessions:
                     self.sessions.remove(session)
 
+def _native_payload(context, payload: bytes, *, epoch=None, owner=None) -> bytes:
+    session = context.session
+    if (session is None or not getattr(session, 'native_lifecycle', False)
+            or not payload or payload[0] not in native_world.SERVER_WORLD | native_world.SERVER_UNSCOPED):
+        return payload
+    if epoch is None:
+        epoch = 0 if payload[0] in native_world.SERVER_UNSCOPED else native_world.dispatch_epoch.get()
+        if epoch is None:
+            epoch = context.server.world_identity[0]
+    if owner is None:
+        entity = session.entity
+        owner = entity.net_id if entity is not None and payload[0] in (0x0E, 0x0F, 0x18, 0x29, 0x38) else 0
+    return native_world.encode(payload, epoch, owner, connection=session.native_generation)
+
+
+def _queue_native_control(session: ClientSession, payload: bytes) -> None:
+    with session.native_control_lock:
+        overflow = len(session.native_control) >= 512
+        if not overflow:
+            session.native_control.append(payload)
+    if overflow:
+        session.disconnect()
+    session.native_control_event.set()
+
+
+def _flush_native_control(ctx) -> None:
+    session = ctx.session
+    for _ in range(64):
+        with session.native_control_lock:
+            if not session.native_control:
+                return
+            payload = session.native_control[0]
+            epoch = struct.unpack_from('>I', payload, 9)[0]
+            if epoch and native_world.newer(epoch, session.native_announced_epoch):
+                return  # The world announcement must precede its control data.
+            session.native_control.popleft()
+        if epoch and epoch != session.native_announced_epoch:
+            continue  # A complete world replacement supersedes old control data.
+        ctx.send(payload)
+    session.native_control_event.set()
+
+
+def _drain_native_requests(server) -> None:
+    for session in tuple(server.sessions):
+        if not getattr(session, 'native_lifecycle', False):
+            continue
+        for _ in range(8):
+            try:
+                epoch, owner, sequence, payload = session.native_requests.get_nowait()
+            except queue.Empty:
+                break
+            if (session.stop_ping_event.is_set() or not session.is_logged_in
+                    or not session.is_ready_for_updates or epoch != server.world_identity[0]
+                    or epoch != session.native_announced_epoch):
+                continue
+            opcode = payload[0]
+            if opcode in native_world.CLIENT_OWNER:
+                entity = session.entity
+                if entity is None or owner != entity.net_id or not entity.is_manned or entity.health_points <= 0:
+                    continue
+            if opcode in native_world.ACTION_OPS and not native_world.newer(sequence, session.native_action_sequence):
+                continue
+            # Native mutations execute on the simulation thread, alongside
+            # death/map/ownership transitions. TCP writes use a separate worker.
+            token = native_world.dispatch_session.set(session)
+            epoch_token = native_world.dispatch_epoch.set(epoch)
+            try:
+                dispatcher.dispatch_datagram(session.udp_context, payload)
+                if opcode in native_world.ACTION_OPS:
+                    session.native_action_sequence = sequence
+            except Exception as error:
+                print(f"[native] request rejected player={session.player_id} opcode={opcode:#x} error={type(error).__name__}")
+                session.disconnect()
+            finally:
+                native_world.dispatch_epoch.reset(epoch_token)
+                native_world.dispatch_session.reset(token)
+
+
 class TcpContext:
     """
     Context for a specific TCP Client connection.
@@ -621,7 +720,7 @@ class TcpContext:
         # or map it to session.stop_ping_event
         self.stop_ping_event = session.stop_ping_event
 
-    def send(self, packet_data: bytes | Packet):
+    def send(self, packet_data: bytes | Packet, *, epoch=None, owner=None):
         """
         Sends data. Can accept raw bytes OR a Packet object
         """
@@ -631,6 +730,7 @@ class TcpContext:
         else:
             payload = packet_data
 
+        payload = _native_payload(self, payload, epoch=epoch, owner=owner)
         try:
             self.transport.send_payload(payload)
             self.server.trace.packet(
@@ -671,6 +771,15 @@ class UdpContext:
             payload = payload
 
 
+        opcode = payload[0] if payload else -1
+        payload = _native_payload(self, payload)
+        if self.session is not None and getattr(self.session, 'native_lifecycle', False):
+            if opcode in native_world.SERVER_RELIABLE:
+                _queue_native_control(self.session, payload)
+                return
+            if payload[:1] == bytes([native_world.OPCODE]) and len(payload) > 1200:
+                self.session.disconnect()
+                return
         self.transport.send(payload, self.addr)
         self.server.trace.packet(
             "server_to_client",
@@ -867,6 +976,7 @@ def send_existing_player_entity_definitions(ctx: TcpContext | UdpContext, reason
     local_stats = _local_stats(session.entity)
     payloads = ctx.server.entities.build_forced_update_packets(
         entities,
+        max_payload=native_world.UPDATE_LIMIT if getattr(session, 'native_lifecycle', False) else None,
         sequence_num=get_ticks(),
         is_view_update=False,
         forced_mask=forced_mask,
@@ -1472,6 +1582,7 @@ def _broadcast_dirty_state(
             if send_update_arrays and dirty_entities:
                 payloads = server.entities.build_update_packets(
                     others,
+                    max_payload=native_world.UPDATE_LIMIT if getattr(session, 'native_lifecycle', False) else None,
                     sequence_num=current_tick,
                     is_view_update=False,
                     local_stats=my_stats,
@@ -1651,6 +1762,7 @@ def global_game_loop(server: WulframServerContext):
     while not server.stop_update_event.is_set():
         server.last_game_loop_at = time.monotonic()
         server.hooks.before_game_loop_iteration(server)
+        _drain_native_requests(server)
 
         now = time.monotonic()
         _finalize_expired_player_deaths(server, now)
@@ -1721,12 +1833,18 @@ def start_ping_loop(ctx: TcpContext):
         next_ping = 0.0
         while not ctx.stop_ping_event.is_set():
             try:
+                native = getattr(ctx.session, 'native_lifecycle', False)
+                if native:
+                    ctx.session.native_control_event.clear()
                 if ctx.session.world_change_event.is_set():
                     announce_world(ctx)
+                if native:
+                    _flush_native_control(ctx)
                 if time.monotonic() >= next_ping:
                     ctx.send(PingRequestPacket())
                     next_ping = time.monotonic()+10.0
-                ctx.session.world_change_event.wait(max(0.0, next_ping-time.monotonic()))
+                wake = ctx.session.native_control_event if native else ctx.session.world_change_event
+                wake.wait(max(0.0, next_ping-time.monotonic()))
             except Exception:
                 ctx.session.disconnect()
                 break
@@ -1743,6 +1861,54 @@ def unknown_packet(ctx, payload: bytes):
 
 # Create dispatcher early here
 dispatcher = PacketDispatcher(on_unknown=unknown_packet)
+
+
+def _accept_native_scope(ctx, payload: bytes) -> None:
+    session = ctx.session
+    if session is None or not session.is_logged_in or not getattr(session, 'native_lifecycle', False):
+        return
+    connection, epoch, owner, sequence, body = native_world.decode(payload)
+    if connection != session.native_generation:
+        return
+    if body[0] not in native_world.CLIENT_WORLD:
+        raise PacketDecodeError('unsupported native world request')
+    native_world.validate_request_body(body)
+    if body[0] == 0x39:
+        if not isinstance(ctx, TcpContext):
+            raise PacketDecodeError('native readiness requires the control connection')
+        # An ACK may arrive before the sending worker publishes its announced
+        # epoch. Wait for that same world lock instead of dropping a valid ACK.
+        with session.world_lock:
+            if epoch != ctx.server.world_identity[0] or epoch != session.native_announced_epoch:
+                return
+            token = native_world.dispatch_session.set(session)
+            epoch_token = native_world.dispatch_epoch.set(epoch)
+            try:
+                dispatcher.dispatch_payload(ctx, body)
+            finally:
+                native_world.dispatch_epoch.reset(epoch_token)
+                native_world.dispatch_session.reset(token)
+        return
+    if epoch != ctx.server.world_identity[0] or epoch != session.native_announced_epoch:
+        return
+    try:
+        session.native_requests.put_nowait((epoch, owner, sequence, body))
+    except queue.Full:
+        session.disconnect()
+
+
+@dispatcher.route(native_world.OPCODE)
+def on_native_control(ctx: TcpContext, payload: bytes):
+    _accept_native_scope(ctx, payload)
+
+
+@dispatcher.datagram_route(native_world.OPCODE)
+def on_native_datagram(ctx: UdpContext, reader: PacketReader):
+    header = reader.read_bytes(native_world.HEADER.size-1)
+    size = struct.unpack_from('>H', header, len(header)-2)[0]
+    if not 1 <= size <= native_world.MAX_BODY:
+        raise PacketDecodeError('invalid native world request size')
+    _accept_native_scope(ctx, bytes([native_world.OPCODE])+header+reader.read_bytes(size))
 
 # --- TCP Routes ---
 
@@ -1869,7 +2035,11 @@ def on_want_updates(ctx: TcpContext, payload: bytes):
                 or ctx.session.world_change_event.is_set()
                 or getattr(ctx.server, 'map_change_transition', None) is not None):
             return
+        if (getattr(ctx.session, 'native_lifecycle', False)
+                and native_world.dispatch_epoch.get() != ctx.server.world_identity[0]):
+            return
         land = ctx.server.land
+        epoch = getattr(ctx.server, 'world_identity', (1, ctx.server.current_map_name))[0]
         print(">>> Client is ready for updates (0x39)")
         ctx.server.trace.state("WANT_UPDATES", player=ctx.session.player_id)
         ctx.send(CommMessagePacket(
@@ -1882,9 +2052,13 @@ def on_want_updates(ctx: TcpContext, payload: bytes):
         ))
         snapshots = ctx.server.entities.get_snapshot_packets(
             sequence_num=get_ticks(), health=1.0, energy=1.0, viewer_team=ctx.session.team,
+            max_payload=native_world.UPDATE_LIMIT if getattr(ctx.session, 'native_lifecycle', False) else None,
         )
         for snapshot in snapshots:
-            ctx.send(snapshot)
+            if getattr(ctx.session, 'native_lifecycle', False):
+                ctx.send(snapshot, epoch=epoch, owner=0)
+            else:
+                ctx.send(snapshot)
         # Teardown can begin while this TCP worker sends its snapshot. The
         # replacement announcement waits for world_lock and rearms readiness.
         if (ctx.server.land is not land or getattr(ctx.server, 'map_change_transition', None) is not None
@@ -1905,7 +2079,12 @@ def announce_world(ctx: TcpContext, *, initial: bool = False) -> None:
             return  # An unfinished login announces the current map itself.
         ctx.session.is_ready_for_updates = False
         ctx.session.world_announced = False
-        ctx.send(WorldStatsPacket(map_name=ctx.server.current_map_name))
+        epoch, map_name = getattr(ctx.server, 'world_identity', (1, ctx.server.current_map_name))
+        if getattr(ctx.session, 'native_lifecycle', False):
+            ctx.send(WorldStatsPacket(map_name=map_name), epoch=epoch, owner=0)
+            ctx.session.native_announced_epoch = epoch
+        else:
+            ctx.send(WorldStatsPacket(map_name=map_name))
         if not ctx.session.stop_ping_event.is_set():
             ctx.session.world_announced = True
 
@@ -2121,8 +2300,10 @@ def on_root_hello(ctx: UdpContext, reader: PacketReader):
     if ctx.session is not None and getattr(ctx.session, "is_logged_in", False):
         # This requests a capability; only bootstrap freezes the active format.
         # Later/reordered greetings cannot change an already advertised table.
-        ctx.session.requested_precise_actions = greeting in (PRECISE_ACTION_HELLO, COMBAT_EVENT_HELLO)
-        ctx.session.requested_combat_events = greeting == COMBAT_EVENT_HELLO
+        ctx.session.requested_precise_actions = greeting in (PRECISE_ACTION_HELLO, COMBAT_EVENT_HELLO, native_world.HELLO)
+        ctx.session.requested_combat_events = greeting in (COMBAT_EVENT_HELLO, native_world.HELLO)
+        if greeting == native_world.HELLO:
+            ctx.session.requested_lifecycle = True
     payload = reader.byte_slice(packet_start)
     ctx.server.logger.log_packet("UDP-RECV (ROOT-HELLO)", payload=payload, show_ascii=True)
 
@@ -2659,6 +2840,8 @@ def parse_action_packet(ctx: UdpContext, reader: PacketReader, is_dump: bool):
 
     # Do not partially change authoritative input state if a malformed packet
     # ends halfway through its action table.
+    if native_world.dispatch_session.get() is ctx.session and reader.remaining_bits:
+        raise PacketDecodeError('trailing native action data')
     decoded_actions = []
     for action_id, value in action_values:
         old_value, new_value = _store_action_value(
@@ -2767,6 +2950,8 @@ def broadcast(server: WulframServerContext, packet_data: bytes | Packet, exclude
                 # One coalescing event bounds memory and keeps slow TCP writes
                 # (or an in-flight snapshot) out of the simulation thread.
                 session.world_change_event.set()
+                if getattr(session, 'native_lifecycle', False):
+                    session.native_control_event.set()
             elif session.udp_context:
                 session.udp_context.send(payload)
         except Exception as e:
@@ -3046,6 +3231,9 @@ def do_login_and_bootstrap(client_sock: socket.socket, ctx: TcpContext, dispatch
     # independent of other players and never mutates the process-wide table.
     ctx.session.precise_actions = bool(getattr(ctx.session, "requested_precise_actions", False))
     ctx.session.combat_events = bool(getattr(ctx.session, "requested_combat_events", False))
+    ctx.session.native_lifecycle = bool(getattr(ctx.session, "requested_lifecycle", False))
+    if ctx.session.native_lifecycle and getattr(client_sock, 'family', None) in (socket.AF_INET, socket.AF_INET6):
+        client_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     ctx.send(TranslationPacket(precise_actions=ctx.session.precise_actions))
     
     # --- ROSTER SYNC ---

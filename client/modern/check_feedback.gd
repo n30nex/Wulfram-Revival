@@ -18,6 +18,7 @@ func _run() -> void:
 	game._load_map("crossroads")
 	assert(game.terrain_loaded and game.feedback.configured and game.audio.loaded)
 	game.network.state = "ready"
+	game.network.map_name = "crossroads"
 	game.network.vehicle_id = 1
 	game.network.health = 1
 	game.network.fuel = 1

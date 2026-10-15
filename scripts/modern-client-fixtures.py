@@ -20,6 +20,8 @@ from wulfram_server.network.packets.gameplay import (DeleteObjectPacket, Transie
     PositionalTransient, EntityTransient, ExplosionTransient)
 from wulfram_server.network.streams import PacketWriter
 from wulfram_server.network.translation_config import get_config_by_index, PRECISE_ACTION_CONFIG
+from wulfram_server.network import native_world
+from wulfram_server.network.packets import WorldStatsPacket
 
 
 def control_fixture(precise=False):
@@ -88,6 +90,24 @@ def original_format_fixture():
             'strip_sha256': hashlib.sha256(decoded).hexdigest()}
 
 
+def native_lifecycle_fixture():
+    tank = TankPacket(42, 101, TankPacketConfig(), unit_type=0, team_id=1, health=.8, energy=.6).serialize()
+    next_tank = TankPacket(43, 201, TankPacketConfig(), unit_type=0, team_id=1, health=1.0, energy=1.0).serialize()
+    snapshot = UpdateArrayPacket(202, is_view_update=True)
+    snapshot.set_local_stats(.25, .1)
+    snapshot.add_entity(GameEntity(200, 0, 2, pos=(10, 20, 30)), force_spawn=True, forced_mask=0x3ff)
+    raw = b'\x0f'+snapshot.get_bytes()
+    return {'world1': native_world.encode(WorldStatsPacket('crossroads').serialize(), 1, connection=1).hex(),
+            'world2': native_world.encode(WorldStatsPacket('mayhem').serialize(), 2, connection=1).hex(),
+            'tank': native_world.encode(tank, 1, 42, connection=1).hex(),
+            'next_tank': native_world.encode(next_tank, 1, 43, connection=1).hex(),
+            'delete': native_world.encode(DeleteObjectPacket(42).serialize(), 1, connection=1).hex(),
+            'old_owner': native_world.encode(raw, 1, 42, connection=1).hex(),
+            'current_owner': native_world.encode(raw, 1, 43, connection=1).hex(),
+            'raw_snapshot': raw.hex(),
+            'outgoing': native_world.encode(bytes.fromhex(control_fixture(True)), 1, 42, 7, connection=1).hex()}
+
+
 def fixtures():
     snapshot = UpdateArrayPacket(100, is_view_update=True)
     snapshot.set_local_stats(.75, .5, weapon_table_id=1)
@@ -107,6 +127,7 @@ def fixtures():
     older_remote.add_entity(GameEntity(200, 0, 1, pos=(30, 40, 50)), force_spawn=True, forced_mask=3)
     return {
         'original_formats': original_format_fixture(),
+        'native_lifecycle': native_lifecycle_fixture(),
         'snapshot': (b'\x0f' + snapshot.get_bytes()).hex(),
         'tank': TankPacket(42, 99, TankPacketConfig(), pos=(10.5, -20.25, 6.0),
                            rot=(0, 0, 1.5), health=.8, energy=.6).serialize().hex(),

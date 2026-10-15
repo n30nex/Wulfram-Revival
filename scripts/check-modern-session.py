@@ -47,7 +47,7 @@ def main():
     parser.add_argument('--godot', type=Path, required=True)
     parser.add_argument('--content-root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--journey', choices=('combat', 'communications'), default='combat')
+    parser.add_argument('--journey', choices=('combat', 'communications', 'capacity'), default='combat')
     args = parser.parse_args()
     log_path = args.output.with_suffix('.log')
     if any(p.exists() for p in (args.output, log_path)):
@@ -57,7 +57,8 @@ def main():
         tcp.bind(('127.0.0.1', 0))
         port = tcp.getsockname()[1]
         udp.bind(('127.0.0.1', port))
-    report = {'passed': False, 'physical_display_qualified': False, 'journey': args.journey}
+    report = {'passed': False, 'physical_display_qualified': False, 'journey': args.journey,
+              'peak_sessions': 0, 'peak_human_vehicles': 0}
     began = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='wulfram-modern-') as temporary, \
             log_path.open('x', encoding='utf-8') as log, contextlib.redirect_stdout(log):
@@ -74,7 +75,7 @@ def main():
         environment = dict(os.environ, WULFRAM_TEST_PORT=str(port), WULFRAM_TEST_JOIN_CODE='private-client-test',
                            WULFRAM_PROBE_PASSWORD='private-client-test')
         def modern():
-            script = 'check_comms_session.gd' if args.journey == 'communications' else 'check_session.gd'
+            script = {'communications': 'check_comms_session.gd', 'capacity': 'check_capacity.gd'}.get(args.journey, 'check_session.gd')
             run = subprocess.run([str(args.godot.resolve()), '--headless', '--path', str(ROOT/'client/modern'),
                                   '--script', 'res://'+script], env=environment,
                                  capture_output=True, text=True, timeout=40)
@@ -87,8 +88,8 @@ def main():
         def legacy():
             run = subprocess.run([sys.executable, str(ROOT/'scripts/check-online.py'), '--host', '127.0.0.1',
                 '--expected-ip', '127.0.0.1', '--port', str(port), '--bots', '64', '--team-capacity', '40',
-                '--team', '1', '--seconds', '8', '--drive', '--callsign', 'LegacyCoexistence'],
-                env=environment, capture_output=True, text=True, timeout=40)
+                '--team', '1', '--seconds', '30' if args.journey == 'capacity' else '8', '--drive', '--callsign', 'LegacyCoexistence'],
+                env=environment, capture_output=True, text=True, timeout=55 if args.journey == 'capacity' else 40)
             result = json.loads(run.stdout)
             result['exit_code'] = run.returncode
             return result
@@ -105,6 +106,11 @@ def main():
             with ThreadPoolExecutor(max_workers=2) as pool:
                 modern_result, legacy_result = pool.submit(modern), pool.submit(legacy)
                 while not (modern_result.done() and legacy_result.done()):
+                    sessions = tuple(server.sessions)
+                    report['peak_sessions'] = max(report['peak_sessions'], len(sessions))
+                    report['peak_human_vehicles'] = max(report['peak_human_vehicles'], sum(
+                        not getattr(s, 'is_bot', False) and (live_entity := s.entity) is not None and live_entity.is_manned and live_entity.health_points > 0
+                        for s in sessions))
                     players = [s for s in tuple(server.sessions) if s.name == 'ModernCombatCheck']
                     for session in players:
                         for entity in server.entities.get_all():
@@ -130,6 +136,8 @@ def main():
                     and len(hooks.precise_values) > 5 and {1, 2, 3, 4, 5, 6, 8, 9, 12, 13} <= hooks.observed
                     and projectiles == {'pulse', 'piercer'}
                     and projectile_ids <= set(report['modern'].get('projectile_event_ids', [])))
+            elif args.journey == 'capacity':
+                report['passed'] &= report['peak_sessions'] == 80 and report['peak_human_vehicles'] == 16
         finally:
             server.shutdown()
             worker.join(timeout=5)

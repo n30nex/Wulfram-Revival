@@ -7,13 +7,14 @@ func _init() -> void:
 	var fixture: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://test-fixtures.json"))
 	var network := Network.new()
 	network.state = "ready"
+	network.map_name = "crossroads"
 	network.player_id = 7
-	network._handle(fixture.translation.hex_decode())
+	network._handle(fixture.translation.hex_decode(), true)
 	assert(network.state == "ready")
 	assert(network.action_maximum == 1000.0)
-	network._handle(fixture.precise_translation.hex_decode())
+	network._handle(fixture.precise_translation.hex_decode(), true)
 	assert(network.state == "ready" and network.action_maximum == 1.0)
-	network._handle(fixture.behavior.hex_decode())
+	network._handle(fixture.behavior.hex_decode(), true)
 	assert(network.weapons.size() == 4 and network.weapons[0][4].enabled)
 	assert(network.weapons[1][1].enabled and not network.weapons[1][4].enabled)
 	assert(network.vehicle_settings.size() == 2)
@@ -80,7 +81,8 @@ func _init() -> void:
 		for size_value in range(1, bytes.size()):
 			var broken := Network.new()
 			broken.state = "ready"
-			broken._handle(bytes.slice(0, size_value))
+			broken.map_name = "crossroads"
+			broken._handle(bytes.slice(0, size_value), true)
 			assert(broken.malformed == 1, "Accepted truncated " + name + " at " + str(size_value))
 			assert(broken.entities.is_empty())
 			broken.free()

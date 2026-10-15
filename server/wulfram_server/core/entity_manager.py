@@ -128,39 +128,41 @@ class EntityManager:
 
     # --- PACKET GENERATION ---
 
-    def _bounded_packets(self, entities, build):
+    def _bounded_packets(self, entities, build, max_payload=None):
+        limit = self.MAX_UPDATE_PAYLOAD if max_payload is None else max_payload
         # Retail records usually occupy 35-45 bytes. Start with a plausible
         # datagram rather than serializing the entire 80-player world, throwing
         # it away, then repeatedly serializing both halves for every recipient.
         # The byte check below remains authoritative for unusually large records.
         if len(entities) > 24:
             for start in range(0,len(entities),24):
-                yield from self._bounded_packets(entities[start:start+24],build)
+                yield from self._bounded_packets(entities[start:start+24],build,limit)
             return
         # Every chunk carries the same simulation timestamp. The retail
         # decoder applies that timestamp per entity, not per datagram.
         payload = build(entities) if len(entities) <= 255 else None
-        if payload is not None and len(payload) <= self.MAX_UPDATE_PAYLOAD:
+        if payload is not None and len(payload) <= limit:
             yield payload
         elif len(entities) > 1:
             middle = len(entities) // 2
-            yield from self._bounded_packets(entities[:middle], build)
-            yield from self._bounded_packets(entities[middle:], build)
+            yield from self._bounded_packets(entities[:middle], build, limit)
+            yield from self._bounded_packets(entities[middle:], build, limit)
         elif payload:
             raise ValueError("one entity exceeds the update datagram limit")
 
-    def build_update_packets(self, entities, **options):
-        yield from self._bounded_packets(entities, lambda group: self.build_update_packet(group, **options))
+    def build_update_packets(self, entities, *, max_payload=None, **options):
+        yield from self._bounded_packets(entities, lambda group: self.build_update_packet(group, **options), max_payload)
 
-    def build_forced_update_packets(self, entities, **options):
-        yield from self._bounded_packets(entities, lambda group: self.build_forced_update_packet(group, **options))
+    def build_forced_update_packets(self, entities, *, max_payload=None, **options):
+        yield from self._bounded_packets(entities, lambda group: self.build_forced_update_packet(group, **options), max_payload)
 
-    def get_snapshot_packets(self, sequence_num, health=1.0, energy=1.0, viewer_team=None):
+    def get_snapshot_packets(self, sequence_num, health=1.0, energy=1.0, viewer_team=None, max_payload=None):
         mask = (UpdateMask.DEFINITION | UpdateMask.POS | UpdateMask.VEL | UpdateMask.ROT
                 | UpdateMask.HEALTH | UpdateMask.WEAPON | UpdateMask.OWNER | UpdateMask.HARD_SYNC)
         for payload in self.build_forced_update_packets(
             self.get_all(), sequence_num=sequence_num, is_view_update=True,
             local_stats=(health, energy), forced_mask=mask, viewer_team=viewer_team,
+            max_payload=max_payload,
         ):
             yield b'\x0F' + payload
 
