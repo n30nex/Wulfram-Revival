@@ -1,0 +1,462 @@
+class_name WulfNetwork
+extends Node
+## Native TCP/UDP client; no Python bridge or changes to the public server.
+
+signal status_changed(message: String)
+signal world_changed(map_name: String)
+signal deployed
+signal changed
+
+const Wire = preload("res://wire.gd")
+const MAX_BUFFER := 262144
+var tcp := StreamPeerTCP.new()
+var udp := PacketPeerUDP.new()
+var incoming := PackedByteArray()
+var outgoing := PackedByteArray()
+var entities: Dictionary = {}
+var roster: Dictionary = {}
+var vehicle_id := 0
+var player_id := 0
+var team := 0
+var health := 0.0
+var fuel := 0.0
+var map_name := ""
+var state := "offline"
+var ping_ms := 0
+var malformed := 0
+var snapshots := 0
+var movement_packets := 0
+var firing_packets := 0
+var reliable_sequence := 0
+var _callsign := ""
+var _join_code := ""
+var _key := ""
+var _endpoint := ""
+var _port := 0
+var _stamp := 0
+var _deadline := 0.0
+var _retry_at := 0.0
+var _ping_at := 0.0
+var _last_packet := 0.0
+var _entity_sequences: Dictionary = {}
+var _deleted: Dictionary = {}
+var _last_vitals_sequence := -1
+var _team_requested := 0
+var _team_retry_at := 0.0
+var _team_deadline := 0.0
+
+func connect_game(host: String, port: int, callsign: String, join_code: String) -> void:
+	disconnect_game()
+	var valid_name := RegEx.create_from_string("^[A-Za-z0-9 _.-]{1,24}$")
+	if host.is_empty() or port < 1 or port > 65535 or valid_name.search(callsign) == null or join_code.length() > 128:
+		status_changed.emit("Enter a server and a callsign of 1–24 letters, numbers or spaces.")
+		return
+	_callsign = callsign
+	_join_code = join_code
+	_port = port
+	if tcp.connect_to_host(host, port) != OK:
+		_fail("Could not connect to the server.")
+		return
+	state = "connecting"
+	_deadline = now() + 20.0
+	_last_packet = now()
+	status_changed.emit("Connecting to " + host + "…")
+
+func disconnect_game() -> void:
+	tcp.disconnect_from_host()
+	udp.close()
+	state = "offline"
+	incoming.clear()
+	outgoing.clear()
+	entities.clear()
+	roster.clear()
+	vehicle_id = 0
+	player_id = 0
+	team = 0
+	map_name = ""
+	_key = ""
+	_join_code = ""
+	_endpoint = ""
+	_entity_sequences.clear()
+	_deleted.clear()
+	_last_vitals_sequence = -1
+	reliable_sequence = 0
+	snapshots = 0
+	movement_packets = 0
+	firing_packets = 0
+	_team_requested = 0
+	health = 0.0
+	fuel = 0.0
+	changed.emit()
+
+func _fail(message: String) -> void:
+	disconnect_game()
+	status_changed.emit(message)
+
+static func now() -> float:
+	return Time.get_ticks_msec() / 1000.0
+
+static func stamp() -> int:
+	return Time.get_ticks_msec() & 0x7fffffff
+
+func _send_tcp(payload: PackedByteArray) -> void:
+	if outgoing.size() + payload.size() + 2 > MAX_BUFFER:
+		_fail("The server is not accepting data. Reconnect to try again.")
+		return
+	outgoing.append_array(Wire.new().put(payload.size() + 2, 16).data)
+	outgoing.append_array(payload)
+
+func _send_udp(payload: PackedByteArray) -> void:
+	if udp.is_socket_connected() and udp.put_packet(payload) != OK:
+		_fail("The UDP connection failed. Reconnect to try again.")
+
+func _process(_delta: float) -> void:
+	if state == "offline":
+		return
+	tcp.poll()
+	if tcp.get_status() in [StreamPeerTCP.STATUS_ERROR, StreamPeerTCP.STATUS_NONE]:
+		_fail("Connection closed. You can reconnect without restarting the client.")
+		return
+	if state != "ready" and now() > _deadline:
+		_fail("Connection timed out. Check the server address and TCP/UDP port.")
+		return
+	if tcp.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+		return
+	if state == "connecting":
+		state = "hello"
+		tcp.set_no_delay(true)
+	if not outgoing.is_empty():
+		var sent := tcp.put_partial_data(outgoing)
+		if sent[0] != OK:
+			_fail("Could not send to the server.")
+			return
+		outgoing = outgoing.slice(sent[1])
+	var available := tcp.get_available_bytes()
+	if available > 0:
+		var received := tcp.get_partial_data(mini(available, 65536))
+		if received[0] != OK:
+			_fail("Could not read from the server.")
+			return
+		incoming.append_array(received[1])
+		if incoming.size() > MAX_BUFFER:
+			_fail("The server sent too much buffered data.")
+			return
+	while incoming.size() >= 2:
+		var length := (int(incoming[0]) << 8) | incoming[1]
+		if length < 3 or length > 65535:
+			_fail("Unsupported server packet.")
+			return
+		if incoming.size() < length:
+			break
+		var packet := incoming.slice(2, length)
+		incoming = incoming.slice(length)
+		_handle(packet)
+	for index in mini(udp.get_available_packet_count(), 256):
+		var packet := udp.get_packet()
+		if packet.size() >= 3 and ((int(packet[0]) << 8) | packet[1]) == packet.size():
+			packet = packet.slice(2)
+		_handle(packet)
+	if state == "key" and now() >= _retry_at:
+		_send_udp(Wire.new().put(0x13, 8).put(1, 8).text(_key).data)
+		_retry_at = now() + 1.0
+	if state == "handshake" and now() >= _retry_at:
+		_send_handshake()
+		_retry_at = now() + 1.0
+	if state == "ready" and now() >= _ping_at:
+		_send_udp(Wire.new().put(0x0b, 8).put(stamp(), 32).put(0, 32).data)
+		_ping_at = now() + 1.0
+	if state == "ready" and _team_requested != 0 and now() >= _team_retry_at:
+		if now() > _team_deadline:
+			_team_requested = 0
+			status_changed.emit("Team selection timed out. Choose a team to retry.")
+		else:
+			reliable_sequence = (reliable_sequence + 1) & 0xffff
+			_send_udp(Wire.new().put(0x25, 8).put(reliable_sequence, 16).put(14, 16).put(1, 8).put(_team_requested, 32).put(0, 32).data)
+			_team_retry_at = now() + 1.0
+	if now() - _last_packet > 15.0:
+		_fail("The server stopped responding. Reconnect to try again.")
+
+func _send_handshake() -> void:
+	var packet := Wire.new().put(8, 8).text("Hello There").put(3, 8).put(_stamp, 32).put(1, 32).put(4, 32)
+	var names := ["Unreliable", "Reliable", "Stream 2", "Game Data"]
+	for index in 4:
+		packet.text(names[index]).put(1, 32).put(index, 32)
+	packet.put(4, 32)
+	for index in 4:
+		packet.put(index, 32).put(1, 32)
+	_send_udp(packet.data)
+
+func _handle(packet: PackedByteArray) -> void:
+	if packet.is_empty():
+		return
+	_last_packet = now()
+	var reader := Wire.new(packet)
+	var opcode := reader.take(8)
+	match opcode:
+		0x13:
+			var mode := reader.take(8)
+			if mode == 1 and state == "hello":
+				var port := reader.take(16)
+				var count := reader.take(16)
+				var host := reader.read_text()
+				if not reader.valid or count != 1 or host != tcp.get_connected_host() or port != _port:
+					_fail("The server advertised an unexpected UDP endpoint.")
+					return
+				_endpoint = host
+			elif mode == 2 and state == "hello":
+				_key = reader.read_text()
+			elif mode == 3 and state in ["login", "handshake"]:
+				state = "handshake"
+				_stamp = stamp()
+				_retry_at = 0.0
+			if not _endpoint.is_empty() and not _key.is_empty() and state == "hello":
+				if udp.connect_to_host(_endpoint, _port) != OK:
+					_fail("Could not open the UDP connection.")
+					return
+				state = "key"
+				_retry_at = 0.0
+		0x4d:
+			if state == "key":
+				_send_tcp(Wire.new().put(0x21, 8).put(3, 8).text(_callsign).text(_join_code).data)
+				_join_code = ""
+				_key = ""
+				state = "login"
+		0x03:
+			if state == "handshake":
+				_send_udp(Wire.new().put(2, 8).put(0, 8).put(_stamp, 32).data)
+				state = "bootstrap"
+		0x22:
+			reader.take(8)
+			var code := reader.take(8)
+			if code != 8:
+				_fail("Join code rejected. Use the public player join code from the guide.")
+		0x17:
+			player_id = reader.take(32)
+		0x25:
+			var code := reader.take(8)
+			if code == 17 and _team_requested != 0:
+				_confirm_team(_team_requested)
+			elif code == 4:
+				_team_requested = 0
+		0x1c:
+			var id := reader.take(32)
+			reader.take(32)
+			var side := reader.take(16)
+			if reader.valid and id == player_id and side in [1, 2]:
+				_confirm_team(side)
+		0x1b:
+			var id := reader.take(32)
+			if reader.valid:
+				roster.erase(id)
+		0x1f:
+			reader.take(16)
+			reader.take(32)
+			reader.take(16)
+			reader.take(32)
+			var message := reader.read_text()
+			if reader.valid:
+				status_changed.emit(message)
+		0x32:
+			_validate_translation(reader)
+		0x16:
+			var new_map := reader.read_text()
+			if not reader.valid or RegEx.create_from_string("^[a-zA-Z0-9_-]{1,64}$").search(new_map) == null:
+				_fail("Unsupported map name.")
+				return
+			map_name = new_map
+			entities.clear()
+			vehicle_id = 0
+			_entity_sequences.clear()
+			_deleted.clear()
+			_last_vitals_sequence = -1
+			world_changed.emit(map_name)
+			_send_tcp(PackedByteArray([0x39, 1]))
+		0x1a:
+			var id := reader.take(32)
+			reader.take(32)
+			var side := reader.take(16)
+			reader.take(16)
+			var name_text := reader.read_text()
+			if reader.valid and roster.size() < 256:
+				roster[id] = {"name": name_text, "team": side}
+		0x0e, 0x0f:
+			_decode_updates(reader, opcode == 0x0f)
+		0x18:
+			reader.take(32)
+			var stats := reader.vitals()
+			var unit := reader.take(32)
+			var id := reader.take(32)
+			var side := reader.take(8)
+			var position := reader.fixed_vector()
+			var rotation := reader.fixed_vector()
+			if reader.valid and unit in [0, 1]:
+				vehicle_id = id
+				team = side
+				_apply_vitals(stats)
+				entities[id] = {"unit": unit, "team": side, "pos": position, "rot": rotation, "health": health}
+				deployed.emit()
+		0x15:
+			reader.take(32)
+			for index in reader.take(8):
+				var id := reader.take(32)
+				reader.take(8)
+				if reader.valid:
+					entities.erase(id)
+					_entity_sequences.erase(id)
+					_deleted[id] = true
+					if _deleted.size() > 4096:
+						_deleted.erase(_deleted.keys()[0])
+					if vehicle_id == id:
+						vehicle_id = 0
+		0x0b:
+			var tick := reader.take(32)
+			if reader.valid:
+				_send_udp(Wire.new().put(0x0c, 8).put(tick, 32).data)
+		0x0c:
+			ping_ms = maxi(0, stamp() - reader.take(32))
+	if not reader.valid:
+		malformed += 1
+		_fail("The server sent an incomplete or unsupported packet.")
+	changed.emit()
+
+func _apply_vitals(stats: Dictionary) -> void:
+	if not stats.is_empty():
+		health = stats.health
+		fuel = stats.fuel
+
+func _validate_translation(reader: WulfWire) -> void:
+	# This slice supports the revival's advertised quantizers, not arbitrary
+	# legacy servers. Reject different tables rather than drawing corrupt poses.
+	for index in 28:
+		var header := reader.take(32)
+		reader.take(32)
+		var total := reader.take(32)
+		var maximum := reader.read_text()
+		var span := reader.read_text()
+		var expected := [16, 0, 1000.0, 2000.0]
+		if index == 1:
+			expected = [5, 0, 0.0, 0.0]
+		elif index in [2, 3, 4]:
+			expected = [8, 0, 0.0, 0.0]
+		elif index in [5, 8]:
+			expected = [10, 0, 1.0, 1.0]
+		elif index in [13, 14]:
+			expected = [8, 0, 1.0, 1.0]
+		elif index >= 16:
+			expected = [[2, 16, 8192.0, 16384.0], [2, 16, 1000.0, 2000.0], [2, 16, 6.3, 12.6], [2, 16, 200.0, 400.0]][(index - 16) % 4]
+		if not maximum.is_valid_float() or not span.is_valid_float() or header != expected[0] or total != expected[1] or not is_equal_approx(float(maximum), expected[2]) or not is_equal_approx(float(span), expected[3]):
+			reader.valid = false
+			return
+
+func _decode_updates(reader: WulfWire, view: bool) -> void:
+	if view:
+		reader.take(32)
+	var sequence := reader.take(32)
+	var stats := reader.vitals()
+	var updates: Dictionary = {}
+	for index in reader.take(8):
+		var id := reader.take(32)
+		reader.take(1)
+		var mask := reader.take(10)
+		var bank := reader.take(16)
+		if bank > 2:
+			reader.valid = false
+			return
+		var item: Dictionary = entities.get(id, {}).duplicate()
+		if mask & 1:
+			item.unit = reader.take(8)
+			item.team = reader.take(8)
+			reader.take(8)
+			if item.unit == 37:
+				reader.take(32)
+				reader.take(32)
+			elif item.unit == 19:
+				reader.take(8)
+			reader.take(1)
+		for field in [[2, "pos", 8192.0, 16384.0], [4, "vel", 1000.0, 2000.0], [8, "rot", 6.3, 12.6], [16, "spin", 200.0, 400.0]]:
+			if mask & int(field[0]):
+				item[field[1]] = reader.vector(field[2], field[3])
+		if mask & 32:
+			item.health = reader.scalar(10, 1.0, 1.0)
+		if mask & 64:
+			var table := reader.take(5)
+			if table > 3:
+				reader.valid = false
+				return
+			reader.take([3, 2, 0, 1][table])
+		if mask & 128:
+			item.fuel = reader.scalar(10, 1.0, 1.0)
+		if mask & 256:
+			item.player = reader.take(32)
+		updates[id] = item
+	if not reader.valid:
+		return
+	# Owner and remote updates arrive independently. A newer owner packet must
+	# not suppress still-useful positions of other entities from the remote stream.
+	for id in updates:
+		if _deleted.has(id):
+			continue
+		var previous: int = _entity_sequences.get(id, -1)
+		if _older(sequence, previous):
+			if not entities.get(id, {}).has("unit") and updates[id].has("unit"):
+				entities[id]["unit"] = updates[id].unit
+				entities[id]["team"] = updates[id].team
+			continue
+		if entities.size() >= 2048 and not entities.has(id):
+			reader.valid = false
+			return
+		entities[id] = updates[id]
+		_entity_sequences[id] = sequence
+	if not _older(sequence, _last_vitals_sequence):
+		_apply_vitals(stats)
+		_last_vitals_sequence = sequence
+	snapshots += 1
+	if state == "bootstrap":
+		state = "ready"
+		status_changed.emit("Connected. Choose a team and a repair pad.")
+
+static func _older(sequence: int, previous: int) -> bool:
+	return previous >= 0 and sequence < previous and previous - sequence < 0x40000000
+
+func choose_team(side: int) -> void:
+	if state != "ready" or side not in [1, 2]:
+		return
+	if _team_requested == side:
+		return
+	_team_requested = side
+	_team_retry_at = 0.0
+	_team_deadline = now() + 5.0
+	status_changed.emit("Joining " + ("Crimson Federation…" if side == 1 else "Azure Alliance…"))
+
+func _confirm_team(side: int) -> void:
+	if side != team:
+		vehicle_id = 0
+	team = side
+	if side == _team_requested:
+		_team_requested = 0
+		status_changed.emit(("Crimson Federation" if side == 1 else "Azure Alliance") + ". Choose a friendly repair pad.")
+
+func spawn_at(pad: int, vehicle := 0) -> void:
+	if state != "ready" or vehicle_id != 0 or vehicle not in [0, 1]:
+		return
+	var item: Dictionary = entities.get(pad, {})
+	if item.get("unit") != 27 or item.get("team") != team or item.get("health", 0.0) <= 0:
+		return
+	reliable_sequence = (reliable_sequence + 1) & 0xffff
+	_send_udp(Wire.new().put(0x25, 8).put(reliable_sequence, 16).put(22, 16).put(0, 8).put(pad, 32).put(vehicle, 32).put(2000, 32).put(700, 32).data)
+
+func controls(forward: float, turn: float, strafe: float, fire: bool, jump: bool) -> void:
+	if state != "ready" or vehicle_id == 0:
+		return
+	if forward != 0.0 or turn != 0.0 or strafe != 0.0:
+		movement_packets += 1
+	if fire:
+		firing_packets += 1
+	_send_udp(control_packet(stamp(), forward, turn, strafe, fire, jump))
+
+static func control_packet(tick: int, forward: float, turn: float, strafe: float, fire: bool, jump: bool) -> PackedByteArray:
+	var packet := Wire.new().put(0x0a, 8).put(6, 8).put(tick, 32).put(0, 32)
+	for pair in [[1, turn], [2, forward], [3, strafe], [5, 1.0]]:
+		packet.put(pair[0], 16).put(Wire.encoded_scalar(pair[1]), 16)
+	packet.put(8, 16).put(int(fire), 1).put(4, 16).put(int(jump), 1)
+	return packet.data

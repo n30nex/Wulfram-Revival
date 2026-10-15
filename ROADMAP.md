@@ -2,10 +2,19 @@
 
 Agreed direction: October 12, 2026.
 
+**October 15 priority change:** the maintainer requested building a modern client
+from scratch instead of continuing to spend the main effort patching the
+preserved executable. M4 now progresses alongside server/bot qualification, before
+the first stable release. Keep the current public alpha available as a reference
+and fallback. This changes sequencing, not the acceptance standard.
+
 Wulfram Revival is a modern remaster that preserves the original game's hover
 handling and combat. Keep the recognizable cockpit, radar and map arrangement;
-redraw it for clarity and modern displays. Retain the classic sci-fi identity
-while improving assets, lighting and readability.
+adapt it for clarity and modern displays. **Original models and textures must
+look exactly like the original**, as clarified October 15. Import the actual
+geometry, UVs, palette pixels and mip levels; do not replace them with redesigned,
+generated or upscaled art. Rendering and lighting parity require comparison with
+the preserved client before the appearance gate can close.
 
 **[Play the Windows alpha](https://canadaverse.org/wulfram/)** ·
 **[Roadmap tracker](https://github.com/n30nex/Wulfram-Revival/issues/23)** ·
@@ -17,8 +26,9 @@ while improving assets, lighting and readability.
   joining must not displace bots or be blocked by bot capacity.
 - Make the default match welcoming: moderate bots, a guided first deployment
   and brief, visible spawn protection that ends when the player attacks.
-- Stabilize the current playable Windows release before developing the
-  replacement client in stages. A native Linux client is deferred.
+- Develop the native Windows replacement now, using the existing public server,
+  protocol and authoritative hover physics. Maintain the preserved client as a
+  reference and fallback. A native Linux client is deferred.
 - Prioritize coordinated attacks, flanking, retreat and getting unstuck in the
   first major bot upgrade.
 - Qualify the existing feature set for the first stable release. Deeper original
@@ -57,9 +67,9 @@ evidence.
 | [M4: Playable replacement client](https://github.com/n30nex/Wulfram-Revival/milestone/5) | A modern Windows client preserves Wulfram's feel and familiar HUD. | A networked gameplay slice, modern presentation and compatibility/playtest checks pass. |
 | [M5: Classic systems and logistics bots](https://github.com/n30nex/Wulfram-Revival/milestone/6) | Original base and logistics loops return, with bots that build, supply and repair. | Restored systems and support bots work through complete matches. |
 
-M1 and M2 can progress together after M0. Both must finish before M3. M4 follows
-the stable release; M5 follows the playable replacement client. Individual issues
-record more specific dependencies.
+M1, M2 and M4 now progress together after M0. The supported client, server and bot
+acceptance checks must pass before M3. M5 follows the playable replacement client.
+Individual issues record more specific dependencies.
 
 ## Work packages
 
@@ -116,12 +126,16 @@ the exact candidate.
 - [#18: Redraw the familiar cockpit and improve the classic sci-fi presentation](https://github.com/n30nex/Wulfram-Revival/issues/18).
 - [#19: Qualify the replacement-client alpha and its transition path](https://github.com/n30nex/Wulfram-Revival/issues/19).
 
-No engine is selected yet. Choose through a bounded experiment with explicit
-physics, protocol, rendering, packaging and maintenance criteria. Develop a
-working networked slice, compare handling and combat with the preserved client,
-then improve presentation. Keep the recognizable cockpit/radar/map relationship
-and scale it correctly for supported displays. Qualify the transition before
-making the replacement the default download.
+The initial implementation uses Godot 4.7.2, native TCP/UDP and the existing
+server's authoritative physics. See [the native client](client/modern/README.md)
+for the bounded prototype, build recipe and limitations. The first live checks
+connect, select a team, deploy and move without the preserved executable.
+The native asset loader reads the original visual meshes and texture archives;
+terrain composition, original effect/UI coverage and visual comparison remain
+required. Approximate development geometry is not acceptable final content.
+Compare handling and combat with the preserved client and retain the recognizable
+cockpit/radar/map relationship. Qualify the transition before making the
+replacement the default download. A passing connection test does not close M4.
 
 ### M5: Classic systems and logistics bots
 

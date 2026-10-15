@@ -1,0 +1,25 @@
+name: Modern Windows client
+on:
+  push:
+    paths: ['client/modern/**', 'scripts/*modern-client*', 'scripts/import-modern-maps.py', 'scripts/import-original-assets.py', 'server/wulfram_server/**', '.github/workflows/modern-client.yml']
+  pull_request:
+    paths: ['client/modern/**', 'scripts/*modern-client*', 'scripts/import-modern-maps.py', 'scripts/import-original-assets.py', 'server/wulfram_server/**', '.github/workflows/modern-client.yml']
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/cache@v4
+        with:
+          path: build/godot-4.7.2
+          key: godot-4.7.2-windows-official-sha512-v1
+      - run: ./scripts/build-modern-client.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wulfram-modern-windows-x64
+          if-no-files-found: error
+          path: build/modern-client/*
