@@ -45,8 +45,26 @@ func _init() -> void:
 	assert(absf(network.health - .8) < .002)
 	network._handle(fixture.team.hex_decode())
 	assert(network.team == 2)
+	# Stats can arrive before a roster entry; the later name must not rewind them.
+	network._handle(fixture.scores.hex_decode())
+	network._handle(fixture.roster.hex_decode())
+	assert(network.roster[7].team == 2 and network.roster[7].kills == 13 and network.roster[7].deaths == 5 and network.roster[7].round_kills == 3)
+	var messages: Array = []
+	var statuses: Array = []
+	network.status_changed.connect(func(value: String): statuses.append(value))
+	network.message_received.connect(func(text: String, source: int, scope: int, kind: int): messages.append([text, source, scope, kind]))
+	network._handle(fixture.player_chat.hex_decode())
+	assert(messages == [["[b]Hold the pad[/b]", 7, 4, 5]])
+	assert(statuses.is_empty(), "Player chat must not overwrite connection or deployment guidance")
+	network._handle(fixture.birth.hex_decode())
+	assert(network.players_by_entity[42] == 7)
+	network._handle(fixture.tank.hex_decode())
+	network._handle(fixture.death.hex_decode())
+	assert(network.vehicle_id == 42 and network.entities.has(42), "An unsequenced old death notice must not remove a new vehicle")
+	network._handle(fixture.roster_remove.hex_decode())
+	assert(network.roster.is_empty() and network._roster_stats.is_empty())
 	network._handle(fixture.delete.hex_decode())
-	assert(not network.entities.has(42))
+	assert(not network.entities.has(42) and network.players_by_entity.is_empty())
 	assert(Network.control_packet(1234, 1.0, -.5, .25, true, true, .001, .8, true, false, true).hex_encode() == fixture.controls)
 	assert(Network.control_packet(1234, 1.0, -.5, .25, true, true, .001, .8, true, false, true, 1.0).hex_encode() == fixture.precise_controls)
 	var sequence := network.send_chat("/s vehicle scout", 1)
@@ -57,7 +75,7 @@ func _init() -> void:
 	assert(network.send_chat("invalid\ntext") == -1)
 	network.free()
 	var truncated_checks := 0
-	for name in ["snapshot", "tank", "translation", "message", "behavior", "transients", "combat_events"]:
+	for name in ["snapshot", "tank", "translation", "message", "behavior", "transients", "combat_events", "roster", "scores", "birth", "death", "roster_remove", "player_chat"]:
 		var bytes: PackedByteArray = fixture[name].hex_decode()
 		for size_value in range(1, bytes.size()):
 			var broken := Network.new()

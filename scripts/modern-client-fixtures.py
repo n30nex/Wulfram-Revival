@@ -14,7 +14,8 @@ from wulfram_server.network.packets.tank import TankPacket
 from wulfram_server.network.packets.packet_config import TankPacketConfig, BehaviorConfig
 from wulfram_server.network.packets.behavior import BehaviorPacket
 from wulfram_server.network.packets.translation import TranslationPacket
-from wulfram_server.network.packets.player import UpdateStatsPacket, CommMessagePacket
+from wulfram_server.network.packets.player import (UpdateStatsPacket, CommMessagePacket,
+    AddToRosterPacket, RemoveFromRosterPacket, BirthNoticePacket, DeathNoticePacket)
 from wulfram_server.network.packets.gameplay import (DeleteObjectPacket, TransientArrayPacket,
     PositionalTransient, EntityTransient, ExplosionTransient)
 from wulfram_server.network.streams import PacketWriter
@@ -111,6 +112,12 @@ def fixtures():
                            rot=(0, 0, 1.5), health=.8, energy=.6).serialize().hex(),
         'delete': DeleteObjectPacket(42).serialize().hex(),
         'team': UpdateStatsPacket(7, 2).serialize().hex(),
+        'roster': AddToRosterPacket(7, 1, 'Pilot [test]', 'CANADA', 12, 4).serialize().hex(),
+        'scores': UpdateStatsPacket(7, 2, 13, 5, 3).serialize().hex(),
+        'roster_remove': RemoveFromRosterPacket(7).serialize().hex(),
+        'birth': BirthNoticePacket(7, 42).serialize().hex(),
+        'death': DeathNoticePacket(7).serialize().hex(),
+        'player_chat': CommMessagePacket(5, 7, 4, 0, '[b]Hold the pad[/b]').serialize().hex(),
         'message': CommMessagePacket(0, 0, 0, 0, 'Spawn shield ended.').serialize().hex(),
         'translation': translation.hex(),
         'precise_translation': precise_translation.hex(),

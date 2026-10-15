@@ -144,6 +144,9 @@ models, terrain/masks and effects, and restores the original 32-panel map skies.
 The 0.1.4 preview adds original sound clips and accepted shot/impact/explosion
 feedback; server alpha2.8 preserves legacy-client traffic. Bounded native and
 legacy live journeys pass, including actual Tank and Scout identity checks.
+The 0.1.6 preview adds team/global chat, a player scoreboard and complete score
+updates. Engine GUI checks cover typing, channel popups, held-input release,
+scrolling and 80 roster rows. Private peers verify team isolation and cleanup.
 Sky fog/lighting, decorative/remaining effect/UI coverage, runtime texture-variant behavior and full
 visual comparison remain required. Approximate development geometry is not
 acceptable final content.

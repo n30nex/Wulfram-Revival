@@ -4,6 +4,70 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Native communications and roster increment, October 15, 2026
+
+The published 0.1.6 preview adds global/team chat, bounded plain-text history in the
+cockpit and communications panel, server commands, and an 80-player scoreboard.
+Scores now consume the complete server stats packet, including match kills and
+connection totals. Stats arriving before a roster name are retained; departed
+players and stale vehicle associations are removed. Player text is not markup
+and no longer replaces connection/deployment guidance. Messages are displayed
+on server echo, with an uncertainty notice if delivery cannot be confirmed.
+
+Typing and player panels immediately release movement/weapons while preserving
+hover settings. Returning to play requires held controls to be released first.
+Opening an owned channel popup previously hid its parent during the engine's
+focus transition and crashed. The corrected focus path keeps the dialog alive;
+real popup opening, keyboard selection and subsequent typing now pass in both
+headless and GPU GUI routes. History/scoreboard scrolling and selection survive
+updates. Original models, textures, physics and server code are unchanged.
+
+Validation: 121 Python tests pass. Native checks reject 4,882 truncated packets
+and verify out-of-order roster metadata, score fields, literal chat and stale
+death notices. GUI event checks pass all five requested sizes from 800x600 to
+3840x2160, with 80 roster rows, channel selection, Enter/Shift+Enter/F4 shortcuts,
+input release and bounded history. These are engine events, not physical mouse,
+DPI or monitor qualification.
+
+A 13.33-second private native-physics run with 64 bots, three native peers and a
+legacy probe passed. Team chat reached the two intended native peers and was
+excluded from the other team; global chat reached all three. All three requests
+were acknowledged, roster removal propagated, malformed packets and dropped
+catch-up ticks were zero, and all human sessions/UDP peers were cleaned up.
+The test server stopped. A separate 15.16-second combat regression passed actual
+Tank/Scout movement (104.66/31.89 units), accepted weapons, precise aim, 233
+snapshots and clean teardown with zero dropped ticks. No test chat was sent to
+the public server. This does
+not close full loss/reordering, combat lifecycle, remaining equipment/prediction,
+visual parity, performance or human approval gates.
+
+Exact source `94a02d0e2926045de88d8922f7c9dd580ee438f5` from
+[PR #44](https://github.com/n30nex/Wulfram-Revival/pull/44) passed all ten push/PR
+checks. The clean Windows export comes from
+[Actions 38784224193](https://github.com/n30nex/Wulfram-Revival/actions/runs/38784224193).
+
+- [Windows preview 0.1.6](https://canadaverse.org/downloads/wulfram/Wulfram-Revival-Modern-0.1.6-dev-94a02d0.zip):
+  53,231,108 bytes; SHA-256 `ecd38faf41be8d0a7e41b1002dd65e07624967c4baba6e3b193f008f961d56ba`.
+  The complete public HTTP 200 download, checksum and source manifest matched
+  at 18:22 UTC on October 15.
+- EXE SHA-256 `d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562`;
+  PCK SHA-256 `0f5d6750a3e6b43e002a3a4cc5cf6aeb23266e4064041ac23e40590c00ac808f`.
+- The exact exported client rendered the live Frontier match, moved 85.53 world
+  units and received 248 snapshots, nine accepted shots and 18 combat-feedback
+  events without malformed packets. Its capture shows the original sky/assets,
+  new controls and cockpit message history. It disconnected and exited.
+- The GPU communication harness also passed against that exact compiled PCK,
+  loaded by the pinned debug engine so assertions remained enabled. It checked
+  five window sizes, the popup, keyboard routing and 80 scoreboard rows. This
+  is not a physical-mouse or monitor qualification.
+- Server alpha2.8 remains at `0840133e3807617c085112df54763c703b95b32c`, with
+  64 bots, 16 human places and zero automatic restarts at 18:17 UTC. Server and
+  physics sources have no changes in this increment; no restart was needed.
+- Publication adds only the ZIP, checksum and `modern-preview-94a02d0.json`.
+  Removing those three versioned files rolls back this optional preview.
+  The preserved-client default and prior previews remain available, and the
+  manifest retains `production_approved: false`.
+
 ## Original mip decoding and sky increment, October 15, 2026
 
 The published 0.1.5 preview fixes a shared bitmap-decoder error: original mip levels

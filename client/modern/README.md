@@ -22,9 +22,14 @@ The client retries a busy pad for up to 20 seconds; choose another if it stays b
 - Space: jump jets; mouse wheel: adjust hover strength; left mouse: primary weapon.
 - Right mouse or 1: Tank pulse / Scout repair; 2: Tank piercer; R: Scout repair.
 - F2: first/third-person camera; F12: screenshot.
+- Enter: chat; Shift+Enter: team chat. Choose All players or Your team, then
+  Enter or Send. `/s` commands go to the server. Escape closes and keeps a draft.
+- F4: player scoreboard, including team, tag, match kills and connection totals.
 - F1, Escape or Deployment: open the team/deployment panel and release the mouse.
-- F1 or Resume: return to captured mouse control. Losing focus opens the menu
-  and releases weapons while retaining hover strength and vehicle tilt.
+- F1 or Resume: return to captured mouse control. Losing focus releases weapons
+  while retaining hover strength and vehicle tilt. Open communications stay open.
+- Typing and player panels release movement/weapons. Held controls must be
+  released before driving resumes, including when returning from a menu.
 - Disconnect returns to the connection screen without restarting.
 - Sound volume and background muting are available on the connection/deployment
   panels. The complete package includes original audio; extracting only the EXE
@@ -98,10 +103,23 @@ fine aiming, actual pulse/piercer creation, movement, repair input, reliable com
 acknowledgement and disconnect cleanup. `check_input.gd` sends window-coordinate
 events through Godot's real GUI route; a GPU run also checks tactical-map selection.
 Neither harness substitutes for physical mouse/DPI and human combat qualification.
+`--journey communications` checks three native peers and a legacy probe with
+64 bots: team isolation, global chat, command acknowledgements and roster cleanup.
+`check_comms.gd` tests the real GUI route at five window sizes, including channel
+popup focus/selection, text entry, input release, 80 roster rows, scrolling and
+plain-text history. Test messages are sent only to the private loopback server.
 See [combat/audio protocol and checks](COMBAT_AUDIO.md) for the accepted-event
 stream, original sound coverage, silent mixer test and remaining limits.
 
 ## Current scope and gaps
+
+Chat retains up to 120 plain-text messages, with the latest three in the cockpit.
+Player markup is displayed literally. Own messages appear when echoed by the
+server; a timeout reports uncertainty instead of claiming delivery. The roster
+uses complete server score packets, retains updates that arrive before names,
+and removes departed players. Connection kill/death totals reset on reconnect.
+Player chat does not replace connection/deployment guidance. Unsequenced death
+notices cannot delete a later respawn; full loss/lifecycle qualification remains open.
 
 Implemented: direct native session/bootstrap, current server quantizer validation,
 world snapshots, team acknowledgement, Tank/Scout deployment, server-driven

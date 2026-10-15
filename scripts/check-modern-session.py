@@ -47,6 +47,7 @@ def main():
     parser.add_argument('--godot', type=Path, required=True)
     parser.add_argument('--content-root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--journey', choices=('combat', 'communications'), default='combat')
     args = parser.parse_args()
     log_path = args.output.with_suffix('.log')
     if any(p.exists() for p in (args.output, log_path)):
@@ -56,7 +57,7 @@ def main():
         tcp.bind(('127.0.0.1', 0))
         port = tcp.getsockname()[1]
         udp.bind(('127.0.0.1', port))
-    report = {'passed': False, 'physical_display_qualified': False}
+    report = {'passed': False, 'physical_display_qualified': False, 'journey': args.journey}
     began = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='wulfram-modern-') as temporary, \
             log_path.open('x', encoding='utf-8') as log, contextlib.redirect_stdout(log):
@@ -73,8 +74,9 @@ def main():
         environment = dict(os.environ, WULFRAM_TEST_PORT=str(port), WULFRAM_TEST_JOIN_CODE='private-client-test',
                            WULFRAM_PROBE_PASSWORD='private-client-test')
         def modern():
+            script = 'check_comms_session.gd' if args.journey == 'communications' else 'check_session.gd'
             run = subprocess.run([str(args.godot.resolve()), '--headless', '--path', str(ROOT/'client/modern'),
-                                  '--script', 'res://check_session.gd'], env=environment,
+                                  '--script', 'res://'+script], env=environment,
                                  capture_output=True, text=True, timeout=40)
             log.write(run.stdout + run.stderr)
             rows = [line for line in run.stdout.splitlines() if line.startswith('MODERN_SESSION ')]
@@ -121,11 +123,13 @@ def main():
                           dropped_catch_up_ticks=server.physics.metrics.dropped_catch_up_ticks)
             report['passed'] = (report['modern']['passed'] and report['legacy']['passed']
                 and report['legacy']['clean_disconnect'] and report['legacy']['exit_code'] == 0
-                and hooks.formats == {False, True} and hooks.combat_formats == {False, True} and len(hooks.precise_values) > 5
-                and {1, 2, 3, 4, 5, 6, 8, 9, 12, 13} <= hooks.observed
-                and projectiles == {'pulse', 'piercer'} and projectile_ids <= set(report['modern'].get('projectile_event_ids', []))
                 and len(server.sessions) == 64
                 and len(server.udp_sessions) == 0 and not server.fatal_error)
+            if args.journey == 'combat':
+                report['passed'] &= (hooks.formats == {False, True} and hooks.combat_formats == {False, True}
+                    and len(hooks.precise_values) > 5 and {1, 2, 3, 4, 5, 6, 8, 9, 12, 13} <= hooks.observed
+                    and projectiles == {'pulse', 'piercer'}
+                    and projectile_ids <= set(report['modern'].get('projectile_event_ids', [])))
         finally:
             server.shutdown()
             worker.join(timeout=5)

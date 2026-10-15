@@ -8,7 +8,8 @@ signal deployed
 signal changed
 signal transient(event: Dictionary)
 signal object_removed(id: int, explosion: bool, previous: Dictionary)
-signal message_received(message: String, source: int, scope: int)
+signal message_received(message: String, source: int, scope: int, kind: int)
+signal roster_changed
 signal reliable_delivered(sequence: int, success: bool)
 
 const Wire = preload("res://wire.gd")
@@ -19,6 +20,7 @@ var incoming := PackedByteArray()
 var outgoing := PackedByteArray()
 var entities: Dictionary = {}
 var roster: Dictionary = {}
+var _roster_stats: Dictionary = {}
 var vehicle_id := 0
 var player_id := 0
 var team := 0
@@ -88,6 +90,7 @@ func disconnect_game() -> void:
 	outgoing.clear()
 	entities.clear()
 	roster.clear()
+	_roster_stats.clear()
 	vehicle_id = 0
 	player_id = 0
 	team = 0
@@ -293,28 +296,54 @@ func _handle(packet: PackedByteArray) -> void:
 			var id := reader.take(32)
 			reader.take(32)
 			var side := reader.take(16)
-			if reader.valid and id == player_id and side in [1, 2]:
-				_confirm_team(side)
+			reader.take(16)
+			var stats := {"team": side, "kills": reader.take(16), "deaths": reader.take(16), "round_kills": reader.take(16)}
+			reader.fixed()
+			reader.fixed()
+			reader.take(32)
+			if reader.valid:
+				if _roster_stats.has(id) or _roster_stats.size() < 256:
+					_roster_stats[id] = stats
+				if roster.has(id):
+					roster[id].merge(stats, true)
+				if id == player_id and side in [1, 2]:
+					_confirm_team(side)
+				roster_changed.emit()
 		0x1b:
 			var id := reader.take(32)
 			if reader.valid:
 				roster.erase(id)
+				_roster_stats.erase(id)
+				for entity in players_by_entity.keys():
+					if players_by_entity[entity] == id:
+						players_by_entity.erase(entity)
+				roster_changed.emit()
 		0x1f:
-			reader.take(16)
+			var kind := reader.take(16)
 			var source := reader.take(32)
 			var scope := reader.take(16)
 			reader.take(32)
 			var message := reader.read_text()
 			if reader.valid:
-				status_changed.emit(message)
-				message_received.emit(message, source, scope)
+				if kind != 5:
+					status_changed.emit(message)
+				message_received.emit(message, source, scope, kind)
 		0x24:
 			_decode_behavior(reader)
 		0x1e:
 			var player := reader.take(32)
 			var entity := reader.take(32)
-			if reader.valid:
+			if reader.valid and (players_by_entity.has(entity) or players_by_entity.size() < 4096):
+				for previous in players_by_entity.keys():
+					if players_by_entity[previous] == player:
+						players_by_entity.erase(previous)
 				players_by_entity[entity] = player
+		0x1d:
+			var player := reader.take(32)
+			# This notice has no entity ID/sequence. A delayed notice must not
+			# destroy a later respawn; DELETE_OBJECT owns entity removal.
+			if reader.valid and player == player_id and vehicle_id == 0:
+				status_changed.emit("Vehicle lost. Choose a friendly repair pad to redeploy.")
 		0x29:
 			var player := reader.take(32)
 			var has_cargo := reader.take(8) != 0
@@ -362,8 +391,10 @@ func _handle(packet: PackedByteArray) -> void:
 			var deaths := reader.take(16)
 			reader.fixed()
 			reader.take(32)
-			if reader.valid and roster.size() < 256:
+			if reader.valid and (roster.has(id) or roster.size() < 256):
 				roster[id] = {"name": name_text, "tag": tag, "team": side, "kills": kills, "deaths": deaths}
+				roster[id].merge(_roster_stats.get(id, {}), true)
+				roster_changed.emit()
 		0x0e, 0x0f:
 			_decode_updates(reader, opcode == 0x0f)
 		0x18:
