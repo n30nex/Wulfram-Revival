@@ -26,12 +26,14 @@ class DeleteObjectPacket(Packet):
 class PositionalTransient:
     event_type: int
     position: tuple[float, float, float]
+    secondary_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class EntityTransient:
     event_type: int
     entity_id: int
+    secondary_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +129,12 @@ class TransientArrayPacket(Packet):
                 pkt.write_int32(event.entity_id)
             else:
                 raise TypeError(f"unsupported transient event {type(event).__name__}")
-            pkt.write_bool(False)  # No optional secondary entity/reference.
+            secondary = getattr(event, 'secondary_id', None)
+            if secondary is not None and not 0 <= secondary <= 0xFFFFFFFF:
+                raise ValueError('transient secondary reference is out of range')
+            pkt.write_bool(secondary is not None)
+            if secondary is not None:
+                pkt.write_int32(secondary)
 
         return b'\x0D' + pkt.get_bytes()
 

@@ -30,6 +30,12 @@ func _init() -> void:
 	if cockpit_pixels != "31b0f57425fe8c53693292852ab2297c3e4fa0ba0d9b6c5fd0160387f9508c93":
 		assets.errors.append("Cockpit pixels differ from the independent preserved-archive decode.")
 	print("ORIGINAL_STRIPMAPS " + JSON.stringify({"decoded": strips, "cockpit_sha256": cockpit_pixels}))
+	for pair in [["p2Rlanding1", "54e225d8858282549a5fb7c62030b05d17b5aebe5699de5d7c8c5c4d3023b4a5"],
+		["gunblast_front1", "8c52a49c86a90230a080d78386a56c1753f97d22d9375bfd93b0e08257469b7a"]]:
+		hash.start(HashingContext.HASH_SHA256)
+		hash.update(assets._read("base", pair[0]))
+		if hash.finish().hex_encode() != pair[1]:
+			assets.errors.append("Did not retain the original replacement member: " + pair[0])
 	for map_name in ["crossroads", "mayhem", "frontier"]:
 		var terrain := Terrain.new()
 		var passed := terrain.build("res://content/maps/" + map_name + ".land", assets)

@@ -215,7 +215,7 @@ func _process(_delta: float) -> void:
 			delivery.retry = now() + 0.5
 
 func _send_handshake() -> void:
-	var packet := Wire.new().put(8, 8).text("WulframRevival:actions-v1").put(3, 8).put(_stamp, 32).put(1, 32).put(4, 32)
+	var packet := Wire.new().put(8, 8).text("WulframRevival:actions-v1,combat-v1").put(3, 8).put(_stamp, 32).put(1, 32).put(4, 32)
 	var names := ["Unreliable", "Reliable", "Stream 2", "Game Data"]
 	for index in 4:
 		packet.text(names[index]).put(1, 32).put(index, 32)

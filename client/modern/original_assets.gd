@@ -57,11 +57,19 @@ func open_directory(path: String) -> bool:
 		_archives[name] = archive
 		var lookup: Dictionary = {}
 		for entry in archive.get_files():
+			if lookup.has(entry.to_lower()) and not FileAccess.file_exists(path.path_join("resolved/" + name + "/" + entry.to_lower())):
+				errors.append("Original texture data is incomplete. Extract the complete client package.")
+				return false
 			lookup[entry.to_lower()] = entry
 		_names[name] = lookup
 	return true
 
 func _read(archive: String, name: String) -> PackedByteArray:
+	# Original packs append replacements under existing names. ZIPReader
+	# returns the first match; imported last-member bytes retain retail overrides.
+	var resolved := directory.path_join("resolved/" + archive + "/" + name.to_lower())
+	if FileAccess.file_exists(resolved):
+		return FileAccess.get_file_as_bytes(resolved)
 	var entry: String = _names.get(archive, {}).get(name.to_lower(), "")
 	if entry.is_empty():
 		errors.append("Missing original asset: " + archive + "/" + name)

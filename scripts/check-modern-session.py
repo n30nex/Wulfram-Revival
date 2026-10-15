@@ -28,9 +28,11 @@ class TestHooks(ProductionHooks):
         self.observed = set()
         self.precise_values = []
         self.formats = set()
+        self.combat_formats = set()
 
     def action_packet(self, context, packet_name, opcode, decoded_actions):
         self.formats.add(context.session.precise_actions)
+        self.combat_formats.add(context.session.combat_events)
         if context.session.name != 'ModernCombatCheck':
             return
         for channel, _old, value in decoded_actions:
@@ -97,7 +99,7 @@ def main():
                     raise RuntimeError('private server startup failed')
                 time.sleep(.1)
             report['native_sha256'] = hashlib.sha256(Path(server.physics._native.__file__).read_bytes()).hexdigest()
-            projectiles = set()
+            projectiles, projectile_ids = set(), set()
             with ThreadPoolExecutor(max_workers=2) as pool:
                 modern_result, legacy_result = pool.submit(modern), pool.submit(legacy)
                 while not (modern_result.done() and legacy_result.done()):
@@ -106,20 +108,23 @@ def main():
                         for entity in server.entities.get_all():
                             if entity.unit_type == 6 and entity.score_owner_id == session.player_id:
                                 projectiles.add(entity.projectile_kind)
+                                projectile_ids.add(entity.net_id)
                     time.sleep(.02)
                 report['modern'], report['legacy'] = modern_result.result(), legacy_result.result()
             deadline = time.monotonic() + 3
             while any(not getattr(s, 'is_bot', False) for s in server.sessions) and time.monotonic() < deadline:
                 time.sleep(.05)
             report.update(observed_actions=sorted(hooks.observed), action_formats=sorted(hooks.formats),
+                          combat_formats=sorted(hooks.combat_formats),
                           fine_aim_samples=len(hooks.precise_values), projectile_kinds=sorted(projectiles),
                           remaining_sessions=len(server.sessions), remaining_udp_peers=len(server.udp_sessions),
                           dropped_catch_up_ticks=server.physics.metrics.dropped_catch_up_ticks)
             report['passed'] = (report['modern']['passed'] and report['legacy']['passed']
                 and report['legacy']['clean_disconnect'] and report['legacy']['exit_code'] == 0
-                and hooks.formats == {False, True} and len(hooks.precise_values) > 5
+                and hooks.formats == {False, True} and hooks.combat_formats == {False, True} and len(hooks.precise_values) > 5
                 and {1, 2, 3, 4, 5, 6, 8, 9, 12, 13} <= hooks.observed
-                and projectiles == {'pulse', 'piercer'} and len(server.sessions) == 64
+                and projectiles == {'pulse', 'piercer'} and projectile_ids <= set(report['modern'].get('projectile_event_ids', []))
+                and len(server.sessions) == 64
                 and len(server.udp_sessions) == 0 and not server.fatal_error)
         finally:
             server.shutdown()

@@ -4,6 +4,36 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Original sound and accepted combat feedback, October 15, 2026
+
+The 0.1.4 candidate adds original sound playback, volume/background mute controls,
+bounded ambient/flight/repair loops, and original gun-flash/impact/explosion frames.
+Opt-in server events identify accepted shots, actual ray endpoints and projectile
+kinds. Empty fuel/cooldown do not generate shots; repeated events are deduplicated.
+Legacy clients retain their existing stream. Modern event batches stay under
+1200 bytes. Gameplay tuning and the scatter RNG are unchanged.
+
+The asset importer also resolves appended duplicate bitmap members. This restores
+the final pad artwork and transparent high-resolution gun flashes while retaining
+original archives/members byte-for-byte. It includes 93 original Ogg files and the
+104-cue catalogue. Original Sony comment-metadata warnings remain; decoding works.
+
+Validation: 120 Python tests pass. Native fixtures reject 4,754 truncated packets;
+offline audio tests cover decoding, limits, mute/deduplication and cleanup. The
+silent Windows device-mixer check decoded all 104 cues, captured nonzero PCM,
+confirmed right-side panning and held the limiter peak at 0.8913 with a 48-voice
+ceiling. GPU effect packets render original frames and expire; duplicates do not
+create another effect. Existing asset and five-size GUI input checks pass.
+
+A 15.1-second private native-physics match with 64 bots and both client formats
+passed with 0 dropped catch-up ticks. It now asserts actual unit/weapon-table IDs:
+Tank moved 94.3 units and Scout 30.9; both guns, pulse and piercer events arrived,
+including the test player's projectile references. It requested 57 audio voices
+with a peak of 12, and completed 234 snapshots without malformed data. Connections,
+UDP peers and the test server were cleaned up. This is not Pi capacity or physical
+input/audio approval. Full client systems, lifecycle/visual parity and human gates
+remain open. See [protocol and audio evidence](client/modern/COMBAT_AUDIO.md).
+
 ## Original model exterior correction, October 15, 2026
 
 The published 0.1.3 preview corrects model triangle winding when importing the original
@@ -109,8 +139,11 @@ Bounded local evidence:
 - Cross-language fixtures match both action formats and reject 4,718 truncated
   packets. Camera forward vectors agree with the server's combat ray.
 - A 15-second private native-physics match passed with 64 bots, the new client
-  and a simultaneous legacy protocol client. Tank/Scout moved 104.7/124.2 world
-  units; the server observed 48 fine-aim samples and both pulse/piercer projectiles.
+  and a simultaneous legacy protocol client. Its labelled journeys moved
+  104.7/124.2 world units, but a later audit found a forced Tank preference kept
+  the labelled Scout phase in a Tank. That older run does not qualify Scout;
+  the 0.1.4 harness above asserts the actual unit and weapon table. The older
+  server check observed 48 fine-aim samples and both pulse/piercer projectiles.
   Repair input reached the server. Zero dropped catch-up ticks were observed;
   this is a bounded desktop check, not Pi capacity or complete combat approval.
   Both human connections and UDP peers were removed, and the test server stopped.

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import math
 import random
 
-from wulfram_server.core.entity import GameEntity, NEUTRAL_TEAM_ID, UpdateMask
+from wulfram_server.core.entity import GameEntity, NEUTRAL_TEAM_ID, UpdateMask, PendingTransientEvent
 
 
 AUTOCANNON_ACTION = 8
@@ -18,6 +18,10 @@ FLAK_TURRET_UNIT_TYPE = 29
 GUN_TURRET_UNIT_TYPE = 30
 PLAYER_VEHICLE_UNIT_TYPES = frozenset({0, 1})
 GUN_TURRET_MUZZLE_OFFSET = 6.5
+
+# Opt-in combat-v1 presentation. These do not encode damage or accept client hits.
+SHOT_TANK, SHOT_SCOUT, SHOT_PULSE, SHOT_PIERCER, SHOT_FLAK, SHOT_TURRET = range(0x100, 0x106)
+SHOT_IMPACT, SHOT_SURFACE, SHOT_MISS = 0x110, 0x111, 0x112
 
 # Named `missile_pos` attachment points recovered from the full Wulfram II
 # Tank models.  The client autocannon path explicitly uses the separate `gun`
@@ -137,10 +141,22 @@ class CombatSystem:
         self.server = server
         self.cfg = server.packet_cfg.combat
         self._shot_sequence = 0
+        self._presentation_sequence = 0
         self._pulse_positions: dict[int, tuple[float, float, float]] = {}
         self._flak_positions: dict[int, tuple[float, float, float]] = {}
         self._flak_previous_target_distance: dict[int, float] = {}
         self._flak_miss_fuses: dict[int, float] = {}
+
+    def _present_shot(self, source, kind, origin, endpoint=None, hit=False, body_hit=False, reference=None):
+        # Separate from the scatter RNG sequence: presentation cannot change combat.
+        self._presentation_sequence = (self._presentation_sequence + 1) & 0xFFFFFFFF or 1
+        sequence = self._presentation_sequence if reference is None else reference
+        source.pending_transient_events.append(PendingTransientEvent(
+            kind, position=tuple(origin), secondary_id=sequence, modern_only=True))
+        if endpoint is not None:
+            source.pending_transient_events.append(PendingTransientEvent(
+                (SHOT_IMPACT if body_hit else SHOT_SURFACE) if hit else SHOT_MISS, position=tuple(endpoint),
+                secondary_id=sequence, modern_only=True))
 
     def step(self, seconds: float) -> list[Destruction]:
         if seconds <= 0.0 or self.server.physics is None:
@@ -340,6 +356,9 @@ class CombatSystem:
             target.pos,
             ignored_entity=turret.net_id,
         )
+        self._present_shot(turret, SHOT_TURRET, origin,
+                           hit.get('point', target.pos) if hit['hit'] else target.pos,
+                           hit['hit'], bool(hit.get('entity_id', 0)))
         if not hit["hit"] or int(hit["entity_id"]) == 0:
             return
         victim = self.server.entities.get_entity(int(hit["entity_id"]))
@@ -450,6 +469,7 @@ class CombatSystem:
         projectile.vel = _scale(direction, self.cfg.flak_turret_muzzle_speed)
         projectile.related_object_id = turret.net_id
         projectile.score_owner_id = turret.score_owner_id
+        self._present_shot(turret, SHOT_FLAK, muzzle, reference=projectile.net_id)
         projectile.projectile_target_id = target.net_id
         self._flak_positions[projectile.net_id] = projectile.pos
         self._flak_previous_target_distance[projectile.net_id] = _length(
@@ -598,6 +618,9 @@ class CombatSystem:
             end,
             ignored_entity=tank.net_id,
         )
+        self._present_shot(tank, SHOT_SCOUT if tank.unit_type == 1 else SHOT_TANK,
+                           origin, hit.get('point', end) if hit['hit'] else end,
+                           hit['hit'], bool(hit.get('entity_id', 0)))
         if not hit["hit"] or int(hit["entity_id"]) == 0:
             return
         victim = self.server.entities.get_entity(int(hit["entity_id"]))
@@ -630,6 +653,7 @@ class CombatSystem:
         projectile.vel = _add(tank.vel, _scale(forward, speed))
         projectile.related_object_id = tank.net_id
         projectile.score_owner_id = tank.score_owner_id
+        self._present_shot(tank, SHOT_PIERCER if piercer else SHOT_PULSE, muzzle, reference=projectile.net_id)
         projectile.pulse_strength = 1.0 if piercer else tank.pulse_charge
         # Reuse the supported shell presentation; the authoritative fast
         # direct-hit variant has no pulse splash or area impulse.

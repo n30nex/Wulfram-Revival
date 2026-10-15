@@ -116,6 +116,10 @@ def fixtures():
         'behavior': BehaviorPacket(BehaviorConfig()).serialize().hex(),
         'transients': TransientArrayPacket((EntityTransient(0x10, 42),
             PositionalTransient(0x0f, (100, -200, 10)), ExplosionTransient((150, 50, 5), 6))).serialize().hex(),
+        'combat_events': TransientArrayPacket((PositionalTransient(0x100, (10, 20, 30), 7),
+            PositionalTransient(0x111, (100, 200, 300), 7), PositionalTransient(0x121, (200, 50, 30), 42))).serialize().hex(),
+        'visual_feedback': TransientArrayPacket((PositionalTransient(0x100, (486, 1010, 35), 1001),
+            PositionalTransient(0x111, (470, 1035, 12), 1001), PositionalTransient(0x120, (505, 1050, 20), 1002))).serialize().hex(),
         'older_remote': (b'\x0e' + older_remote.get_bytes()).hex(),
         'delete_remote': DeleteObjectPacket(200).serialize().hex(),
     }

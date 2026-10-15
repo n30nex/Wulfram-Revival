@@ -6,6 +6,8 @@ const Assets = preload("res://original_assets.gd")
 const Terrain = preload("res://terrain.gd")
 const VehicleInput = preload("res://vehicle_input.gd")
 const Cockpit = preload("res://cockpit.gd")
+const OriginalAudio = preload("res://original_audio.gd")
+const CombatFeedback = preload("res://combat_feedback.gd")
 const SCALE := 0.1
 var network := Network.new()
 var camera := Camera3D.new()
@@ -13,6 +15,10 @@ var terrain := Terrain.new()
 var visuals: Dictionary = {}
 var assets := Assets.new()
 var assets_loaded := false
+var audio := OriginalAudio.new()
+var feedback := CombatFeedback.new()
+var sound_sliders: Array[HSlider] = []
+var mute_boxes: Array[CheckBox] = []
 var ui := Control.new()
 var connection_panel: Control
 var deployment_panel: Control
@@ -22,6 +28,10 @@ var code_input := LineEdit.new()
 var pad_choice := OptionButton.new()
 var vehicle_choice := OptionButton.new()
 var deploy_button: Button
+var resume_button: Button
+var _asset_error := ""
+var _map_error := ""
+var _closing := false
 var status_label := Label.new()
 var telemetry_label := Label.new()
 var health_bar := ProgressBar.new()
@@ -43,6 +53,7 @@ var _refresh_at := 0.0
 var _spawn_retry_at := 0.0
 var _spawn_until := 0.0
 var _smoke := false
+var _combat_smoke := false
 var _smoke_started := 0.0
 var _first_position := Vector3.ZERO
 var _moved := 0.0
@@ -56,9 +67,19 @@ var _capture_dir := "user://screenshots"
 func _ready() -> void:
 	Engine.max_fps = 120
 	get_window().min_size = Vector2i(800, 600)
+	get_tree().auto_accept_quit = false
+	get_window().close_requested.connect(_quit_safely)
 	add_child(network)
 	add_child(camera)
 	add_child(terrain)
+	add_child(audio)
+	audio.listener = camera
+	feedback.network = network
+	feedback.audio = audio
+	feedback.assets = assets
+	feedback.camera = camera
+	feedback.visuals = visuals
+	add_child(feedback)
 	camera.far = 1800
 	camera.fov = 72
 	camera.position = Vector3(280, 180, -50)
@@ -85,10 +106,15 @@ func _ready() -> void:
 	if FileAccess.file_exists(asset_path.path_join("palette0")):
 		assets_loaded = assets.open_directory(asset_path)
 	if not assets_loaded:
-		status_label.text = "Original graphics are required. Import the preserved assets before deployment."
+		_asset_error = "Original graphics are missing. Extract the complete client package and reopen it."
 	else:
 		cockpit_frame.artwork = assets.stripmap("shockforce_cockpit")
-	network.status_changed.connect(func(message: String): status_label.text = message)
+		if not audio.open_directory(asset_path.path_join("audio")):
+			_asset_error = "Original sounds are missing. Extract the complete client package and reopen it."
+		if not feedback.configure():
+			_asset_error = "Original effects are missing. Extract the complete client package and reopen it."
+	_display_status(status_label.text)
+	network.status_changed.connect(_display_status)
 	network.world_changed.connect(_load_map)
 	network.deployed.connect(_on_deployed)
 	var args := OS.get_cmdline_user_args()
@@ -100,6 +126,8 @@ func _ready() -> void:
 	if "--fullscreen" in args:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 	_smoke = "--online-smoke" in args
+	_combat_smoke = _smoke and "--combat-smoke" in args
+	audio.force_quiet = _smoke or "--quiet-test" in args or "--ui-check" in args
 	_smoke_started = Network.now()
 	if "--connect" in args or _smoke:
 		for value in args:
@@ -146,7 +174,10 @@ func _button(parent: Node, text_value: String, action: Callable) -> Button:
 	button.text = text_value
 	button.custom_minimum_size.y = 42
 	button.add_theme_font_size_override("font_size", 18)
-	button.pressed.connect(action)
+	button.pressed.connect(func():
+		if not _closing:
+			audio.play("CLICK_MINOR")
+			action.call())
 	parent.add_child(button)
 	return button
 
@@ -186,6 +217,7 @@ func _build_ui() -> void:
 		pair[1].custom_minimum_size.y = 38
 		connection.add_child(pair[1])
 	_button(connection, "CONNECT", _connect)
+	_sound_controls(connection)
 	var deployment := _panel(screens, Vector2(520, 0))
 	deployment_panel = deployment.get_parent()
 	deployment_panel.hide()
@@ -205,8 +237,9 @@ func _build_ui() -> void:
 	vehicle_choice.custom_minimum_size.y = 36
 	deployment.add_child(vehicle_choice)
 	deploy_button = _button(deployment, "DEPLOY", _request_spawn)
-	_button(deployment, "RESUME / F1", func(): _set_menu(false))
+	resume_button = _button(deployment, "RESUME / F1", func(): _set_menu(false))
 	_button(deployment, "DISCONNECT", func(): network.disconnect_game(); status_label.text = "Disconnected.")
+	_sound_controls(deployment)
 	var footer := cockpit_frame
 	ui.add_child(footer)
 	footer.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
@@ -262,6 +295,33 @@ func _build_ui() -> void:
 	ui.add_child(reticle)
 	reticle.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+func _display_status(message: String) -> void:
+	status_label.text = _asset_error if not _asset_error.is_empty() else _map_error if not _map_error.is_empty() else message
+
+func _sound_controls(parent: Node) -> void:
+	parent.add_child(_label("Sound volume", 15))
+	var slider := HSlider.new()
+	slider.min_value = 0
+	slider.max_value = 100
+	slider.value = audio.volume * 100.0
+	slider.custom_minimum_size.y = 24
+	parent.add_child(slider)
+	sound_sliders.append(slider)
+	slider.value_changed.connect(func(value: float):
+		audio.set_volume(value / 100.0)
+		for other in sound_sliders:
+			other.set_value_no_signal(value))
+	var box := CheckBox.new()
+	box.text = "Mute when this window is in the background"
+	box.button_pressed = audio.mute_unfocused
+	parent.add_child(box)
+	mute_boxes.append(box)
+	box.toggled.connect(func(value: bool):
+		audio.mute_unfocused = value
+		audio.save_settings()
+		for other in mute_boxes:
+			other.set_pressed_no_signal(value))
+
 func _connect() -> void:
 	_spawn_until = 0.0
 	selected_pad = 0
@@ -280,7 +340,7 @@ func _refresh_pads() -> void:
 	if not _smoke_pads.has(selected_pad):
 		selected_pad = _smoke_pads[0] if not _smoke_pads.is_empty() else 0
 	map_control.selected = selected_pad
-	deploy_button.disabled = selected_pad == 0 or not terrain_loaded or not assets_loaded
+	deploy_button.disabled = selected_pad == 0 or not terrain_loaded or not assets_loaded or not audio.loaded or not feedback.configured or network.vehicle_id != 0
 
 func _request_spawn() -> void:
 	if not terrain_loaded or not assets_loaded or selected_pad == 0:
@@ -305,8 +365,11 @@ func _on_deployed() -> void:
 		get_tree().create_timer(1.0).timeout.connect(_capture)
 
 func _process(delta: float) -> void:
+	audio.focused = get_window().has_focus()
+	feedback.first_person = _first_person
 	connection_panel.visible = network.state == "offline"
 	deployment_panel.visible = network.state == "ready" and (network.vehicle_id == 0 or _menu_open)
+	resume_button.disabled = network.vehicle_id == 0
 	health_bar.value = network.health * 100.0
 	fuel_bar.value = network.fuel * 100.0
 	charge_bar.value = (network.repair_charge if network.weapon_table == 1 else network.pulse_charge) * 100.0
@@ -315,7 +378,7 @@ func _process(delta: float) -> void:
 	if network.vehicle_id == 0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		vehicle_input.clear_motion()
-	telemetry_label.text = "%s  /  %s  /  %d ms  /  %d objects" % [network.map_name.to_upper(), network.state.to_upper(), network.ping_ms, network.entities.size()]
+	telemetry_label.text = "%s  ·  %d ms" % [network.map_name.capitalize(), network.ping_ms] if network.state == "ready" else ""
 	if Network.now() >= _refresh_at:
 		_refresh_pads()
 		_refresh_at = Network.now() + 1.0
@@ -338,10 +401,14 @@ func _process(delta: float) -> void:
 		var fire := focused and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
 		var secondary := focused and (Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) or Input.is_physical_key_pressed(KEY_1))
 		var scout := network.weapon_table == 1
+		var exercise := Network.now() - _deployed_at
+		if _combat_smoke:
+			fire = exercise > .3 and exercise < .8
+			secondary = exercise > 1.2 and exercise < 1.4
 		network.controls(0.7 if _smoke else forward, aim.turn if focused else 0.0, strafe, fire,
 			focused and Input.is_physical_key_pressed(KEY_SPACE), aim.tilt, aim.jet,
 			secondary and not scout, focused and scout and (secondary or Input.is_physical_key_pressed(KEY_R)),
-			focused and not scout and Input.is_physical_key_pressed(KEY_2))
+			(not scout and focused and Input.is_physical_key_pressed(KEY_2)) or (_combat_smoke and exercise > 2.0 and exercise < 2.4))
 	if _smoke:
 		_smoke_step()
 
@@ -370,6 +437,8 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 
 func _unhandled_key_input(event: InputEvent) -> void:
+	if _closing:
+		return
 	if not event.is_pressed() or event.is_echo():
 		return
 	if event.keycode in [KEY_ESCAPE, KEY_F1]:
@@ -381,6 +450,17 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	elif event.keycode == KEY_F12:
 		_capture()
 		get_viewport().set_input_as_handled()
+
+func _quit_safely(code := 0) -> void:
+	if _closing:
+		return
+	_closing = true
+	set_process(false)
+	network.disconnect_game()
+	feedback.reset()
+	# Give the audio mixer a bounded moment to release stopped playback queues.
+	await get_tree().create_timer(.08).timeout
+	get_tree().quit(code)
 
 static func world_position(p: Vector3) -> Vector3:
 	return Vector3(p.x, p.z, -p.y) * SCALE
@@ -428,6 +508,10 @@ func _sync_visuals(delta: float) -> void:
 		visuals[network.vehicle_id].visible = not _first_person
 
 func _load_map(name_value: String) -> void:
+	_map_error = ""
+	for visual in visuals.values():
+		visual.queue_free()
+	visuals.clear()
 	terrain_loaded = false
 	terrain.mesh = null
 	map_control.overview = null
@@ -436,10 +520,12 @@ func _load_map(name_value: String) -> void:
 	if not FileAccess.file_exists(path):
 		path = OS.get_executable_path().get_base_dir().path_join("maps/" + name_value + ".land")
 	if not FileAccess.file_exists(path):
-		status_label.text = "Map content missing. Import the preserved maps before deployment."
+		_map_error = "Map content is missing. Extract the complete client package and reopen it."
+		_display_status(_map_error)
 		return
 	if not assets_loaded or not terrain.build(path, assets):
-		status_label.text = terrain.error if assets_loaded else "Original graphics are missing."
+		_map_error = terrain.error if assets_loaded else "Original graphics are missing."
+		_display_status(_map_error)
 		return
 	world_size = terrain.world_size
 	map_control.world_size = world_size
@@ -462,17 +548,16 @@ func _smoke_step() -> void:
 	if network.vehicle_id != 0 and network.entities.has(network.vehicle_id):
 		var position: Vector3 = network.entities[network.vehicle_id].pos
 		_moved = maxf(_moved, position.distance_to(_first_position))
-		if _moved > 3.0 and terrain_loaded and assets_loaded and Network.now() - _deployed_at > 3.0:
-			print("MODERN_ONLINE " + JSON.stringify({"passed": true, "map": network.map_name, "entities": network.entities.size(), "snapshots": network.snapshots, "movement": _moved, "malformed": network.malformed, "terrain_loaded": terrain_loaded}))
+		if _moved > 3.0 and terrain_loaded and assets_loaded and audio.loaded and feedback.configured and Network.now() - _deployed_at > 3.0:
+			var passed := not _combat_smoke or (feedback.shot_events > 0 and network.firing_packets > 0)
+			print("MODERN_ONLINE " + JSON.stringify({"passed": passed, "map": network.map_name, "entities": network.entities.size(), "snapshots": network.snapshots, "movement": _moved, "malformed": network.malformed, "terrain_loaded": terrain_loaded, "audio_loaded": audio.loaded, "audio_started": audio.started, "feedback_events": feedback.events_played, "shot_events": feedback.shot_events, "firing_packets": network.firing_packets}))
 			_smoke = false
-			network.disconnect_game()
-			get_tree().quit()
+			_quit_safely(0 if passed else 1)
 			return
 	if Network.now() - _smoke_started > 35.0 or (network.state == "offline" and Network.now() - _smoke_started > 2.0):
 		print("MODERN_ONLINE " + JSON.stringify({"passed": false, "state": network.state, "map": network.map_name, "entities": network.entities.size(), "malformed": network.malformed, "message": status_label.text}))
 		_smoke = false
-		network.disconnect_game()
-		get_tree().quit(1)
+		_quit_safely(1)
 
 func _ui_check() -> void:
 	for dimensions in [Vector2i(800, 600), Vector2i(1280, 720), Vector2i(1920, 1080), Vector2i(2560, 1440)]:
@@ -511,6 +596,10 @@ func _capture() -> void:
 	record["terrain_build_msec"] = terrain.build_msec
 	record["terrain_texture_bytes"] = terrain.texture_bytes
 	record["cockpit_instruments"] = cockpit_frame.instruments.get_global_rect()
+	record["audio_loaded"] = audio.loaded
+	record["audio_started"] = audio.started
+	record["audio_peak_voices"] = audio.peak_voices
+	record["feedback_events"] = feedback.events_played
 	record["movement_packets"] = network.movement_packets
 	record["firing_packets"] = network.firing_packets
 	record["position"] = network.entities.get(network.vehicle_id, {}).get("pos", Vector3.ZERO)
