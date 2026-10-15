@@ -4,6 +4,20 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Original model exterior correction, October 15, 2026
+
+The 0.1.3 candidate corrects model triangle winding when importing the original
+right-handed meshes into Godot. Exterior surfaces were being culled, exposing
+interior/bottom faces and hiding top panels. Reversing triangle indices restores
+the exterior and outward normals while retaining every original position, UV
+association, texture and attachment. Terrain and authoritative physics are unchanged.
+
+A synthetic original +Z face failed the outward-normal regression before the
+fix and passes afterward, with unchanged UV bindings. Fixed-camera GPU model
+gallery captures verify exterior rendering on preserved repair/refuel pads,
+Tank and Scout. This correction does not close remaining sky/effect/decorative
+coverage, complete client systems, physical input or human approval gates.
+
 ## Original terrain and cockpit increment, October 15, 2026
 
 The published 0.1.2 development preview corrects two terrain format errors: texture IDs

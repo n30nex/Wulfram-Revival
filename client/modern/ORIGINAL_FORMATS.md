@@ -5,6 +5,18 @@ Reference executable: Wulfram II 2.1.5B, SHA-256
 The following describes recovered file/renderer behavior; the executable and
 original artwork are not included in this repository.
 
+## Model exterior faces
+
+The original visual meshes wind exterior faces counter-clockwise. The coordinate
+rotation `(x, y, z) -> (x, z, -y)` preserves handedness, while Godot's SurfaceTool
+uses clockwise fronts. Import triangles as `(0, next, current)` rather than
+`(0, current, next)`. This restores exterior surfaces and outward generated
+normals without changing original vertex positions, UV associations or textures.
+The earlier winding exposed interiors and hid top panels. A synthetic original
++Z face is required to retain an outward +Y normal and its UV bindings after
+import. That regression failed before the correction and passes afterward.
+`check_models.gd` captures a fixed original repair/refuel/Tank/Scout gallery.
+
 ## LAND contains independent streams
 
 Each line after the dimensions/extents contains a texture ID and a vertex

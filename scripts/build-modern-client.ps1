@@ -52,7 +52,7 @@ $log | Write-Output
 if($LASTEXITCODE -ne 0 -or ($log -join "`n") -match '(SCRIPT ERROR:|ERROR:)') { throw 'Modern-client export failed.' }
 $revision = git -C $repo rev-parse HEAD
 $dirty = [bool](git -C $repo status --porcelain)
-$manifest = [ordered]@{schema=1; version='0.1.2-dev'; source=$revision; dirty=$dirty; engine='4.7.2-stable'; channel='development-preview'; files=@()}
+$manifest = [ordered]@{schema=1; version='0.1.3-dev'; source=$revision; dirty=$dirty; engine='4.7.2-stable'; channel='development-preview'; files=@()}
 foreach($name in @('WulframRevival.exe','WulframRevival.pck')) {
     $path = Join-Path $output $name
     $manifest.files += @{name=$name;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant();bytes=(Get-Item -LiteralPath $path).Length}
