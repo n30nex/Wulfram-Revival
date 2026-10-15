@@ -6,7 +6,7 @@ out of scope for the first release; the Pi server runs on Linux.
 
 ## Original terrain and cockpit increment, October 15, 2026
 
-The 0.1.2 development candidate corrects two terrain format errors: texture IDs
+The published 0.1.2 development preview corrects two terrain format errors: texture IDs
 belong to a (W-1)*(H-1) square grid even though the file interleaves them with W*H
 vertex heights, and binary texture masks must be applied before filtering each
 stored mip. The native physics height grid is unchanged. Fixed-camera before/
@@ -31,9 +31,33 @@ RGBA texture bytes, in pages of 256 layers. The fragment shader samples one
 completed texture. [Format evidence](client/modern/ORIGINAL_FORMATS.md) records
 the original executable identity, reader/compositor behavior and limits. Runtime
 variant randomness, skies, decorative assets, effects and complete UI parity
-remain open; original files are unchanged. This increment requires exact export
-and public-package validation before publication, and does not replace the
-default preserved-client download.
+remain open; original files are unchanged.
+
+[PR #37](https://github.com/n30nex/Wulfram-Revival/pull/37) is merged as `c084c09`.
+Exact source `00d4f44392efc77688ea6fb790efe7a52b131da0` was exported by
+[Actions 38737891770](https://github.com/n30nex/Wulfram-Revival/actions/runs/38737891770),
+with a clean build manifest and all required checks passing.
+
+- [Optional Windows preview ZIP](https://canadaverse.org/downloads/wulfram/Wulfram-Revival-Modern-0.1.2-dev-00d4f44.zip):
+  50,092,577 bytes; SHA-256 `91900680b89b4db333955600391ff4006a5694d9afc7c9de8cba516b6701ccb7`.
+  A complete public HTTP 200 download matched that digest at 13:03 UTC;
+  the public manifest and checksum file also matched.
+- EXE SHA-256 `d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562`;
+  PCK SHA-256 `f2bc9876dd6a3d4b6d50cf8908838b45e58b84ecf830e3fc04e548c47819b605`.
+- The exact exported build rendered a live Crossroads match, deployed, moved
+  90.46 world units and received 252 snapshots with zero malformed packets.
+  Its renderer capture includes the restored frame, road/structure textures,
+  terrain radar/map and live owner vitals.
+- Server code/configuration did not change. The public Pi remained alpha2.7,
+  PID 2503993 with 64 bots, 16 human places and zero automatic restarts at
+  12:49 UTC. The preserved-client page/download remain unchanged.
+- Publication added only the new ZIP, checksum and `modern-preview-00d4f44.json`.
+  Removing those three versioned files rolls back this preview publication;
+  earlier downloads and the game server are independent.
+
+The preview still reports `production_approved: false`. Full original appearance,
+physical input/display and human gameplay approval remain open; this does not
+replace the default preserved-client download.
 
 ## Native aiming and combat increment, October 15, 2026
 
