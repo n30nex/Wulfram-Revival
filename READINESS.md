@@ -6,7 +6,7 @@ out of scope for the first release; the Pi server runs on Linux.
 
 ## Native cargo increment, October 15, 2026
 
-The 0.1.8 candidate restores the original comma/period cargo shortcuts and adds
+The published 0.1.8 preview restores the original comma/period cargo shortcuts and adds
 clickable cockpit controls, cargo names, docked state and pending confirmation.
 Typing punctuation in chat or using a menu does not invoke gameplay commands.
 The client retains cargo until the server confirms its removal; acknowledgement
@@ -28,9 +28,10 @@ attachments. A separate GPU run also requires focused-window shortcut routing
 and captures the original carried crate. These are engine events, not physical
 mouse, DPI or hardware approval.
 
-A 13.18-second private native-physics run with 64 bots and native/legacy peers
+A 13.47-second private native-physics run with 64 bots and native/legacy peers
 passed normal contact pickup, crate drop, friendly gun-turret deployment,
-duplicate request replay and locked enemy drop. A forged enemy-deploy request
+old accepted requests replayed while carrying the next crate, and locked enemy
+drop. Both subsequent crates survived their previous request's replay. A forged enemy-deploy request
 left the cargo intact. Each action created exactly one expected entity. There
 were no malformed packets or dropped catch-up ticks; all human sessions and UDP
 peers were removed and the test server stopped. The short native cargo journey
@@ -38,8 +39,42 @@ does not qualify complete mixed-client matches or Pi full-capacity performance.
 
 See [cargo behavior and limits](client/modern/CARGO.md). Original construction
 rules, power, stolen-cargo unlocking, complete equipment/prediction, full visual
-comparison and human approval remain open. This candidate is not production
+comparison and human approval remain open. This preview is not production
 certification and does not promote the replacement to the default download.
+
+Exact release source `05fdca5fb7a9cfb71583e557aec7ef21ecb0d93a` from
+[PR #47](https://github.com/n30nex/Wulfram-Revival/pull/47) passed all ten push/PR
+checks. Windows export:
+[Actions 38808335618](https://github.com/n30nex/Wulfram-Revival/actions/runs/38808335618).
+ARM64 physics:
+[Actions 38808335693](https://github.com/n30nex/Wulfram-Revival/actions/runs/38808335693).
+
+- [Windows preview 0.1.8](https://canadaverse.org/downloads/wulfram/Wulfram-Revival-Modern-0.1.8-dev-05fdca5.zip):
+  53,245,221 bytes; SHA-256 `6e6c4396cd113a3b40688b113399c5a8d977db94118efdc0355c6a3145dfb2f7`.
+  The full public HTTP 200 download, checksum and manifest matched at 21:25 UTC
+  on October 15. All 164
+  packaged original media entries match their preserved source bytes.
+- EXE SHA-256 `d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562`;
+  PCK SHA-256 `ee71bab2999d7ed5fec8e8e6ea0b43879262c238e300c261e04e00f4dcbccc48`.
+  The exact compiled PCK and packaged original assets passed the GPU cargo GUI
+  harness under the pinned debug engine with assertions enabled, including
+  focused-window shortcuts and a screenshot of the original carried model.
+- The exact exported executable passed a live Crossroads journey with native
+  lifecycle required: 85.94 units moved, 225 snapshots, 11 accepted shots and
+  22 feedback events, with no malformed packets or asset errors. The client
+  disconnected and exited. A separate 20.46-second outside-network legacy
+  journey passed full-health Tank movement, team switch, actual Scout deployment
+  and clean disconnect. Legacy firing was not part of that check.
+- Pi server **0.4.0-alpha2.10** uses the same source, with 64 bots, 16 human places
+  and zero automatic restarts at 21:22 UTC on October 15. All 135 Python tests
+  and the exact ARM binding suite pass on the Pi. The 150-file release is sealed;
+  native artifact and original content identities are unchanged from alpha2.9.
+  Service configuration is unchanged. Verified rollback restores sealed alpha2.9
+  using `/opt/canadaverse/wulfram/backups/20261015-alpha210-05fdca5/rollback.py`.
+- Publication adds only the versioned ZIP, checksum and
+  `modern-preview-05fdca5.json`; removing them rolls back this preview.
+  Prior downloads and the preserved-client default remain available.
+  `production_approved` remains `false`.
 
 ## Native lifecycle and full-capacity increment, October 15, 2026
 
