@@ -9,11 +9,16 @@ const Cockpit = preload("res://cockpit.gd")
 const OriginalAudio = preload("res://original_audio.gd")
 const CombatFeedback = preload("res://combat_feedback.gd")
 const OriginalSky = preload("res://original_sky.gd")
+const PlayerComms = preload("res://player_comms.gd")
 const SCALE := 0.1
 var network := Network.new()
 var camera := Camera3D.new()
 var terrain := Terrain.new()
 var original_sky := OriginalSky.new()
+var comms := PlayerComms.new()
+var chat_button: Button
+var players_button: Button
+var _input_rearm := false
 var visuals: Dictionary = {}
 var assets := Assets.new()
 var assets_loaded := false
@@ -102,7 +107,9 @@ func _ready() -> void:
 	environment_node.environment = environment
 	add_child(environment_node)
 	_build_ui()
-	get_window().focus_exited.connect(func(): _set_menu(true))
+	comms.mode_changed.connect(_social_mode_changed)
+	comms.incoming_chat.connect(func(): audio.play("MESSAGE_HAIL"))
+	get_window().focus_exited.connect(_focus_exited)
 	var asset_path := "res://content/original"
 	if not FileAccess.file_exists(asset_path.path_join("palette0")):
 		asset_path = OS.get_executable_path().get_base_dir().path_join("original")
@@ -203,6 +210,14 @@ func _build_ui() -> void:
 	menu_button.offset_right = -28
 	menu_button.offset_top = 22
 	menu_button.offset_bottom = 64
+	players_button = _button(ui, "PLAYERS / F4", comms.toggle_players)
+	chat_button = _button(ui, "CHAT / ENTER", comms.open_chat)
+	for pair in [[players_button, -400, -212], [chat_button, -590, -412]]:
+		pair[0].set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+		pair[0].offset_left = pair[1]
+		pair[0].offset_right = pair[2]
+		pair[0].offset_top = 22
+		pair[0].offset_bottom = 64
 	var center := CenterContainer.new()
 	ui.add_child(center)
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -255,6 +270,7 @@ func _build_ui() -> void:
 	footer.add_child(radar)
 	footer.radar = radar
 	var cockpit := _panel(footer, Vector2.ZERO)
+	cockpit.add_theme_constant_override("separation", 4)
 	var cockpit_style := StyleBoxFlat.new()
 	cockpit_style.bg_color = Color(0.015, 0.015, 0.02, 0.97)
 	cockpit_style.set_content_margin_all(10)
@@ -287,6 +303,8 @@ func _build_ui() -> void:
 	cockpit.add_child(status_label)
 	telemetry_label.add_theme_font_size_override("font_size", 13)
 	cockpit.add_child(telemetry_label)
+	comms.network = network
+	cockpit.add_child(comms)
 	map_control = Radar.new()
 	map_control.network = network
 	map_control.classic = true
@@ -326,6 +344,7 @@ func _sound_controls(parent: Node) -> void:
 			other.set_pressed_no_signal(value))
 
 func _connect() -> void:
+	comms.clear()
 	_spawn_until = 0.0
 	selected_pad = 0
 	network.connect_game(host_input.text.strip_edges(), server_port, name_input.text.strip_edges(), code_input.text)
@@ -368,20 +387,24 @@ func _on_deployed() -> void:
 		get_tree().create_timer(1.0).timeout.connect(_capture)
 
 func _process(delta: float) -> void:
+	if _input_rearm and not _menu_open and comms.mode.is_empty() and not _held_controls():
+		_input_rearm = false
 	audio.focused = get_window().has_focus()
 	feedback.first_person = _first_person
 	connection_panel.visible = network.state == "offline"
 	deployment_panel.visible = network.state == "ready" and (network.vehicle_id == 0 or _menu_open)
 	resume_button.disabled = network.vehicle_id == 0
+	chat_button.disabled = network.state != "ready"
+	players_button.disabled = network.state != "ready"
 	health_bar.value = network.health * 100.0
 	fuel_bar.value = network.fuel * 100.0
 	charge_bar.value = (network.repair_charge if network.weapon_table == 1 else network.pulse_charge) * 100.0
 	charge_label.text = "REPAIR" if network.weapon_table == 1 else "PULSE"
-	reticle.visible = network.vehicle_id != 0 and not _menu_open
+	reticle.visible = network.vehicle_id != 0 and not _menu_open and comms.mode.is_empty()
 	if network.vehicle_id == 0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		vehicle_input.clear_motion()
-	telemetry_label.text = "%s  ·  %d ms" % [network.map_name.capitalize(), network.ping_ms] if network.state == "ready" else ""
+	telemetry_label.text = "%s · %s · %d ms" % [{1: "Crimson", 2: "Azure"}.get(network.team, "Unassigned"), network.map_name.capitalize(), network.ping_ms] if network.state == "ready" else ""
 	if Network.now() >= _refresh_at:
 		_refresh_pads()
 		_refresh_at = Network.now() + 1.0
@@ -416,15 +439,42 @@ func _process(delta: float) -> void:
 		_smoke_step()
 
 func _driving() -> bool:
-	return network.vehicle_id != 0 and get_window().has_focus() and not _smoke and not _menu_open and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	return network.vehicle_id != 0 and get_window().has_focus() and not _smoke and not _menu_open and comms.mode.is_empty() and not _input_rearm and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+
+static func _held_controls() -> bool:
+	for key in [KEY_W, KEY_A, KEY_S, KEY_D, KEY_Q, KEY_E, KEY_R, KEY_SPACE, KEY_1, KEY_2]:
+		if Input.is_physical_key_pressed(key):
+			return true
+	return Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
+
+func _social_mode_changed(_mode: String) -> void:
+	_refresh_input_capture()
+
+func _focus_exited() -> void:
+	# An owned OptionButton popup also takes window focus. Hiding its parent
+	# during that transition destroys the popup while Godot is registering it.
+	if comms.mode.is_empty():
+		_set_menu(true)
+	else:
+		_refresh_input_capture()
+
+func _refresh_input_capture() -> void:
+	vehicle_input.clear_motion()
+	# A click on Send/Resume must be released before it can fire a weapon.
+	_input_rearm = true
+	var capture := not _menu_open and comms.mode.is_empty() and network.vehicle_id != 0 and get_window().has_focus() and not _smoke
+	if capture:
+		var focus := get_viewport().gui_get_focus_owner()
+		if focus != null:
+			focus.release_focus()
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if capture else Input.MOUSE_MODE_VISIBLE
+	network.controls(0.0, 0.0, 0.0, false, false, vehicle_input.tilt, vehicle_input.jet)
 
 func _set_menu(open: bool) -> void:
 	_menu_open = open
-	vehicle_input.clear_motion()
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if not open and network.vehicle_id != 0 and get_window().has_focus() and not _smoke else Input.MOUSE_MODE_VISIBLE
-	# Release weapons immediately, without cutting hover power or changing aim.
 	if open:
-		network.controls(0.0, 0.0, 0.0, false, false, vehicle_input.tilt, vehicle_input.jet)
+		comms.close()
+	_refresh_input_capture()
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and _driving():
@@ -445,7 +495,16 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if not event.is_pressed() or event.is_echo():
 		return
 	if event.keycode in [KEY_ESCAPE, KEY_F1]:
-		_set_menu(not _menu_open)
+		if not comms.mode.is_empty() and event.keycode == KEY_ESCAPE:
+			comms.close()
+		else:
+			_set_menu(not _menu_open)
+		get_viewport().set_input_as_handled()
+	elif event.keycode in [KEY_ENTER, KEY_KP_ENTER] and network.state == "ready" and comms.mode.is_empty():
+		comms.open_chat(event.shift_pressed)
+		get_viewport().set_input_as_handled()
+	elif event.keycode == KEY_F4:
+		comms.toggle_players()
 		get_viewport().set_input_as_handled()
 	elif event.keycode == KEY_F2:
 		_first_person = not _first_person

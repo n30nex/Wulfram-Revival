@@ -31,6 +31,7 @@ def main():
              ('audio', ['--script', 'res://check_audio.gd'], 'MODERN_AUDIO=PASS'),
              ('layout', ['--', '--ui-check'], 'MODERN_UI_LAYOUT=PASS'),
              ('input', ['--script', 'res://check_input.gd'], 'MODERN_INPUT=PASS')]
+    cases.append(('comms', ['--script', 'res://check_comms.gd'], 'MODERN_COMMS=PASS'))
     for name, options, marker in cases:
         started = time.monotonic()
         try:

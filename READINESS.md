@@ -4,6 +4,43 @@ This is a public community alpha, not a certification of full original-game
 parity or every Windows/GPU/display combination. A native Linux client remains
 out of scope for the first release; the Pi server runs on Linux.
 
+## Native communications and roster increment, October 15, 2026
+
+The 0.1.6 candidate adds global/team chat, bounded plain-text history in the
+cockpit and communications panel, server commands, and an 80-player scoreboard.
+Scores now consume the complete server stats packet, including match kills and
+connection totals. Stats arriving before a roster name are retained; departed
+players and stale vehicle associations are removed. Player text is not markup
+and no longer replaces connection/deployment guidance. Messages are displayed
+on server echo, with an uncertainty notice if delivery cannot be confirmed.
+
+Typing and player panels immediately release movement/weapons while preserving
+hover settings. Returning to play requires held controls to be released first.
+Opening an owned channel popup previously hid its parent during the engine's
+focus transition and crashed. The corrected focus path keeps the dialog alive;
+real popup opening, keyboard selection and subsequent typing now pass in both
+headless and GPU GUI routes. History/scoreboard scrolling and selection survive
+updates. Original models, textures, physics and server code are unchanged.
+
+Validation: 121 Python tests pass. Native checks reject 4,882 truncated packets
+and verify out-of-order roster metadata, score fields, literal chat and stale
+death notices. GUI event checks pass all five requested sizes from 800x600 to
+3840x2160, with 80 roster rows, channel selection, Enter/Shift+Enter/F4 shortcuts,
+input release and bounded history. These are engine events, not physical mouse,
+DPI or monitor qualification.
+
+A 13.33-second private native-physics run with 64 bots, three native peers and a
+legacy probe passed. Team chat reached the two intended native peers and was
+excluded from the other team; global chat reached all three. All three requests
+were acknowledged, roster removal propagated, malformed packets and dropped
+catch-up ticks were zero, and all human sessions/UDP peers were cleaned up.
+The test server stopped. A separate 15.16-second combat regression passed actual
+Tank/Scout movement (104.66/31.89 units), accepted weapons, precise aim, 233
+snapshots and clean teardown with zero dropped ticks. No test chat was sent to
+the public server. This does
+not close full loss/reordering, combat lifecycle, remaining equipment/prediction,
+visual parity, performance or human approval gates.
+
 ## Original mip decoding and sky increment, October 15, 2026
 
 The published 0.1.5 preview fixes a shared bitmap-decoder error: original mip levels
