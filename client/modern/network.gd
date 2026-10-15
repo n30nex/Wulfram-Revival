@@ -1,11 +1,15 @@
 class_name WulfNetwork
 extends Node
-## Native TCP/UDP client; no Python bridge or changes to the public server.
+## Native TCP/UDP client, compatible with the original and precise action tables.
 
 signal status_changed(message: String)
 signal world_changed(map_name: String)
 signal deployed
 signal changed
+signal transient(event: Dictionary)
+signal object_removed(id: int, explosion: bool, previous: Dictionary)
+signal message_received(message: String, source: int, scope: int)
+signal reliable_delivered(sequence: int, success: bool)
 
 const Wire = preload("res://wire.gd")
 const MAX_BUFFER := 262144
@@ -20,6 +24,18 @@ var player_id := 0
 var team := 0
 var health := 0.0
 var fuel := 0.0
+var weapon_table := 0
+var weapon_mask := 0
+var pulse_charge := 0.0
+var repair_charge := 0.0
+var pulse_minimum := 0.05
+var weapons: Array = []
+var vehicle_settings: Array = []
+var docked := false
+var docking_pad := 0
+var carrying := false
+var cargo_item := 0
+var players_by_entity: Dictionary = {}
 var map_name := ""
 var state := "offline"
 var ping_ms := 0
@@ -44,6 +60,8 @@ var _last_vitals_sequence := -1
 var _team_requested := 0
 var _team_retry_at := 0.0
 var _team_deadline := 0.0
+var _pending: Dictionary = {}
+var action_maximum := 1000.0
 
 func connect_game(host: String, port: int, callsign: String, join_code: String) -> void:
 	disconnect_game()
@@ -80,6 +98,16 @@ func disconnect_game() -> void:
 	_entity_sequences.clear()
 	_deleted.clear()
 	_last_vitals_sequence = -1
+	_pending.clear()
+	players_by_entity.clear()
+	weapons.clear()
+	vehicle_settings.clear()
+	weapon_mask = 0
+	action_maximum = 1000.0
+	pulse_charge = 0.0
+	repair_charge = 0.0
+	docked = false
+	carrying = false
 	reliable_sequence = 0
 	snapshots = 0
 	movement_packets = 0
@@ -175,9 +203,19 @@ func _process(_delta: float) -> void:
 			_team_retry_at = now() + 1.0
 	if now() - _last_packet > 15.0:
 		_fail("The server stopped responding. Reconnect to try again.")
+	for sequence in _pending.keys():
+		if not _pending.has(sequence):
+			continue
+		var delivery: Dictionary = _pending[sequence]
+		if now() >= delivery.deadline:
+			_pending.erase(sequence)
+			reliable_delivered.emit(sequence, false)
+		elif now() >= delivery.retry:
+			_send_udp(delivery.packet)
+			delivery.retry = now() + 0.5
 
 func _send_handshake() -> void:
-	var packet := Wire.new().put(8, 8).text("Hello There").put(3, 8).put(_stamp, 32).put(1, 32).put(4, 32)
+	var packet := Wire.new().put(8, 8).text("WulframRevival:actions-v1").put(3, 8).put(_stamp, 32).put(1, 32).put(4, 32)
 	var names := ["Unreliable", "Reliable", "Stream 2", "Game Data"]
 	for index in 4:
 		packet.text(names[index]).put(1, 32).put(index, 32)
@@ -193,6 +231,19 @@ func _handle(packet: PackedByteArray) -> void:
 	var reader := Wire.new(packet)
 	var opcode := reader.take(8)
 	match opcode:
+		0x02:
+			# Server acknowledgements use the advertised reliable stream wrapper.
+			if packet.size() == 9:
+				var server_sequence := reader.take(16)
+				var length := reader.take(16)
+				var mode := reader.take(8)
+				var acknowledged := reader.take(8)
+				var sequence := reader.take(16)
+				if reader.valid and length == 9 and mode == 1:
+					_send_udp(Wire.new().put(2, 8).put(1, 8).put(2, 8).put(server_sequence, 16).data)
+					if _pending.has(sequence) and _pending[sequence].opcode == acknowledged:
+						_pending.erase(sequence)
+						reliable_delivered.emit(sequence, true)
 		0x13:
 			var mode := reader.take(8)
 			if mode == 1 and state == "hello":
@@ -250,12 +301,37 @@ func _handle(packet: PackedByteArray) -> void:
 				roster.erase(id)
 		0x1f:
 			reader.take(16)
-			reader.take(32)
-			reader.take(16)
+			var source := reader.take(32)
+			var scope := reader.take(16)
 			reader.take(32)
 			var message := reader.read_text()
 			if reader.valid:
 				status_changed.emit(message)
+				message_received.emit(message, source, scope)
+		0x24:
+			_decode_behavior(reader)
+		0x1e:
+			var player := reader.take(32)
+			var entity := reader.take(32)
+			if reader.valid:
+				players_by_entity[entity] = player
+		0x29:
+			var player := reader.take(32)
+			var has_cargo := reader.take(8) != 0
+			reader.take(8)
+			var item := reader.take(8)
+			if reader.valid and player == player_id:
+				carrying = has_cargo
+				cargo_item = item
+		0x38:
+			reader.take(32)
+			var pad := reader.take(32)
+			var docking := reader.take(8) != 0
+			if reader.valid:
+				docked = docking
+				docking_pad = pad
+		0x0d:
+			_decode_transients(reader)
 		0x32:
 			_validate_translation(reader)
 		0x16:
@@ -265,6 +341,10 @@ func _handle(packet: PackedByteArray) -> void:
 				return
 			map_name = new_map
 			entities.clear()
+			players_by_entity.clear()
+			_pending.clear()
+			docked = false
+			carrying = false
 			vehicle_id = 0
 			_entity_sequences.clear()
 			_deleted.clear()
@@ -277,8 +357,13 @@ func _handle(packet: PackedByteArray) -> void:
 			var side := reader.take(16)
 			reader.take(16)
 			var name_text := reader.read_text()
+			var tag := reader.read_text()
+			var kills := reader.take(16)
+			var deaths := reader.take(16)
+			reader.fixed()
+			reader.take(32)
 			if reader.valid and roster.size() < 256:
-				roster[id] = {"name": name_text, "team": side}
+				roster[id] = {"name": name_text, "tag": tag, "team": side, "kills": kills, "deaths": deaths}
 		0x0e, 0x0f:
 			_decode_updates(reader, opcode == 0x0f)
 		0x18:
@@ -299,9 +384,11 @@ func _handle(packet: PackedByteArray) -> void:
 			reader.take(32)
 			for index in reader.take(8):
 				var id := reader.take(32)
-				reader.take(8)
+				var explosion := reader.take(8) != 0
 				if reader.valid:
+					object_removed.emit(id, explosion, entities.get(id, {}).duplicate())
 					entities.erase(id)
+					players_by_entity.erase(id)
 					_entity_sequences.erase(id)
 					_deleted[id] = true
 					if _deleted.size() > 4096:
@@ -311,7 +398,7 @@ func _handle(packet: PackedByteArray) -> void:
 		0x0b:
 			var tick := reader.take(32)
 			if reader.valid:
-				_send_udp(Wire.new().put(0x0c, 8).put(tick, 32).data)
+				_send_udp(Wire.new().put(0x0c, 8).put(tick, 32).put(0, 32).data)
 		0x0c:
 			ping_ms = maxi(0, stamp() - reader.take(32))
 	if not reader.valid:
@@ -323,10 +410,87 @@ func _apply_vitals(stats: Dictionary) -> void:
 	if not stats.is_empty():
 		health = stats.health
 		fuel = stats.fuel
+		weapon_table = stats.weapon_table
+		weapon_mask = stats.weapon_mask
+		pulse_charge = stats.get("pulse_charge", 0.0)
+		repair_charge = stats.get("repair_charge", 0.0)
+
+func _decode_behavior(reader: WulfWire) -> void:
+	if reader.data.size() < 1 + 95 + 4 * 13 * 45:
+		reader.valid = false
+		return
+	reader.bit = (1 + 45) * 8
+	var minimum := reader.fixed()
+	reader.bit = (1 + 95) * 8
+	var tables: Array = []
+	for table in 4:
+		var slots: Array = []
+		for slot in 13:
+			var enabled := reader.take(8) != 0
+			for flag in 4:
+				reader.take(8)
+			var aim := reader.fixed()
+			var cooldown := reader.take(32)
+			for field in 4:
+				reader.take(32)
+			var cost := reader.fixed()
+			var damage := reader.fixed()
+			var distance := reader.fixed()
+			var interval := reader.fixed()
+			slots.append({"enabled": enabled, "aim": aim, "cooldown": cooldown / 1000.0, "cost": cost, "damage": damage, "range": distance, "interval": interval})
+		tables.append(slots)
+	# Read the remaining definitions too. A truncated physics tail must not
+	# leave apparently valid weapons paired with incomplete vehicle settings.
+	for index in 39 * 3:
+		reader.take(32)
+	var vehicles: Array = []
+	for index in 2:
+		for field in 4:
+			reader.take(32)
+		var jet_start := reader.fixed()
+		var jet_minimum := reader.fixed()
+		reader.fixed()
+		reader.take(32)
+		reader.take(32)
+		vehicles.append({"jet_start": clampf(jet_start, 0.0, 1.0), "jet_minimum": clampf(jet_minimum, 0.0, 1.0)})
+	for shape in 4:
+		var points := reader.take(32)
+		if points > 32:
+			reader.valid = false
+			return
+		for component in points * 7 + 1:
+			reader.take(32)
+	for component in 27:
+		reader.take(32)
+	if reader.bit != reader.data.size() * 8:
+		reader.valid = false
+	if reader.valid:
+		weapons = tables
+		pulse_minimum = minimum
+		vehicle_settings = vehicles
+
+func _decode_transients(reader: WulfWire) -> void:
+	var events: Array = []
+	for index in reader.take(8):
+		var event := {"type": reader.take(16)}
+		var positioned := reader.take(1) != 0
+		if positioned:
+			if event.type == 0x27:
+				event["unit"] = reader.take(32)
+			event["pos"] = Vector3(reader.scalar(14, 8192.0, 16384.0), reader.scalar(14, 8192.0, 16384.0), reader.scalar(14, 8192.0, 16384.0))
+		else:
+			event["entity"] = reader.take(32)
+		if reader.take(1) != 0:
+			event["secondary"] = reader.take(32)
+		events.append(event)
+	if reader.valid:
+		for event in events:
+			transient.emit(event)
 
 func _validate_translation(reader: WulfWire) -> void:
 	# This slice supports the revival's advertised quantizers, not arbitrary
 	# legacy servers. Reject different tables rather than drawing corrupt poses.
+	var actions: Array = []
 	for index in 28:
 		var header := reader.take(32)
 		reader.take(32)
@@ -334,7 +498,10 @@ func _validate_translation(reader: WulfWire) -> void:
 		var maximum := reader.read_text()
 		var span := reader.read_text()
 		var expected := [16, 0, 1000.0, 2000.0]
-		if index == 1:
+		if index in [10, 11] and float(maximum) in [1.0, 1000.0]:
+			expected = [16, 0, float(maximum), float(maximum) * 2.0]
+			actions.append(float(maximum))
+		elif index == 1:
 			expected = [5, 0, 0.0, 0.0]
 		elif index in [2, 3, 4]:
 			expected = [8, 0, 0.0, 0.0]
@@ -347,6 +514,10 @@ func _validate_translation(reader: WulfWire) -> void:
 		if not maximum.is_valid_float() or not span.is_valid_float() or header != expected[0] or total != expected[1] or not is_equal_approx(float(maximum), expected[2]) or not is_equal_approx(float(span), expected[3]):
 			reader.valid = false
 			return
+	if actions.size() != 2 or actions[0] != actions[1]:
+		reader.valid = false
+	elif reader.valid:
+		action_maximum = actions[0]
 
 func _decode_updates(reader: WulfWire, view: bool) -> void:
 	if view:
@@ -383,11 +554,12 @@ func _decode_updates(reader: WulfWire, view: bool) -> void:
 			if table > 3:
 				reader.valid = false
 				return
-			reader.take([3, 2, 0, 1][table])
+			item.weapon_table = table
+			item.weapon_mask = reader.take([3, 2, 0, 1][table])
 		if mask & 128:
 			item.fuel = reader.scalar(10, 1.0, 1.0)
 		if mask & 256:
-			item.player = reader.take(32)
+			item.target = reader.take(32)
 		updates[id] = item
 	if not reader.valid:
 		return
@@ -445,18 +617,37 @@ func spawn_at(pad: int, vehicle := 0) -> void:
 	reliable_sequence = (reliable_sequence + 1) & 0xffff
 	_send_udp(Wire.new().put(0x25, 8).put(reliable_sequence, 16).put(22, 16).put(0, 8).put(pad, 32).put(vehicle, 32).put(2000, 32).put(700, 32).data)
 
-func controls(forward: float, turn: float, strafe: float, fire: bool, jump: bool) -> void:
+func controls(forward: float, turn: float, strafe: float, fire: bool, jump: bool, tilt := 0.0, jet := 1.0, pulse := false, repair := false, piercer := false) -> void:
 	if state != "ready" or vehicle_id == 0:
 		return
 	if forward != 0.0 or turn != 0.0 or strafe != 0.0:
 		movement_packets += 1
 	if fire:
 		firing_packets += 1
-	_send_udp(control_packet(stamp(), forward, turn, strafe, fire, jump))
+	_send_udp(control_packet(stamp(), forward, turn, strafe, fire, jump, tilt, jet, pulse, repair, piercer, action_maximum))
 
-static func control_packet(tick: int, forward: float, turn: float, strafe: float, fire: bool, jump: bool) -> PackedByteArray:
-	var packet := Wire.new().put(0x0a, 8).put(6, 8).put(tick, 32).put(0, 32)
-	for pair in [[1, turn], [2, forward], [3, strafe], [5, 1.0]]:
-		packet.put(pair[0], 16).put(Wire.encoded_scalar(pair[1]), 16)
-	packet.put(8, 16).put(int(fire), 1).put(4, 16).put(int(jump), 1)
+static func control_packet(tick: int, forward: float, turn: float, strafe: float, fire: bool, jump: bool, tilt := 0.0, jet := 1.0, pulse := false, repair := false, piercer := false, maximum := 1000.0) -> PackedByteArray:
+	var packet := Wire.new().put(0x0a, 8).put(11, 8).put(tick, 32).put(0, 32)
+	for pair in [[1, turn], [2, forward], [3, strafe], [5, jet], [6, tilt], [7, 0.0]]:
+		packet.put(pair[0], 16).put(Wire.encoded_scalar(pair[1], maximum), 16)
+	for pair in [[8, fire], [4, jump], [12, pulse], [9, repair], [13, piercer]]:
+		packet.put(pair[0], 16).put(int(pair[1]), 1)
 	return packet.data
+
+func reliable(opcode: int, body: PackedByteArray) -> int:
+	if state != "ready" or _pending.size() >= 16 or body.size() > 4096:
+		return -1
+	reliable_sequence = (reliable_sequence + 1) & 0xffff
+	var packet := Wire.new().put(opcode, 8).put(reliable_sequence, 16).put(body.size() + 5, 16).data
+	packet.append_array(body)
+	_pending[reliable_sequence] = {"opcode": opcode, "packet": packet, "retry": now() + 0.5, "deadline": now() + 5.0}
+	_send_udp(packet)
+	return reliable_sequence
+
+func send_chat(message: String, scope := 0) -> int:
+	if message.length() < 1 or message.length() > 240 or scope not in [0, 1, 4]:
+		return -1
+	for index in message.length():
+		if message.unicode_at(index) < 32 or message.unicode_at(index) > 126:
+			return -1
+	return reliable(0x20, Wire.new().put(scope, 16).put(0, 16).text(message).data)

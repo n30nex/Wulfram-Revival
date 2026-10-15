@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from wulfram_server.network.streams import PacketWriter
-from wulfram_server.network.translation_config import GLOBAL_CONFIGS
+from wulfram_server.network.translation_config import GLOBAL_CONFIGS, PRECISE_ACTION_TRANSLATION
 from wulfram_server.core.config import get_ticks
 from wulfram_server.network.packets.base import Packet 
 
@@ -11,12 +11,15 @@ class TranslationPacket(Packet):
     Packet 0x32: TRANSLATION (Configuration)
     Configures the floating-point quantization table.
     """
+    precise_actions: bool = False
 
     def serialize(self) -> bytes:
         pkt = PacketWriter()
 
         # Iterate through the Source of Truth
         for i, cfg in enumerate(GLOBAL_CONFIGS):
+            if self.precise_actions and i in (10, 11):
+                cfg = PRECISE_ACTION_TRANSLATION
             print(f"[DEBUG] {i}: Max={cfg['max']} Range={cfg['range']}")
             # 1. Fixed ID / Header Bits
             pkt.write_int32(cfg['head'])

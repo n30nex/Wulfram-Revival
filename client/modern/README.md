@@ -17,10 +17,14 @@ Open the executable, choose a unique callsign, and connect to
 Choose Crimson or Azure, select a friendly repair pad, then Deploy.
 The client retries a busy pad for up to 20 seconds; choose another if it stays busy.
 
-- W/S: forward and reverse; A/D: strafe; Q/E: turn.
-- Space: jump jets; left mouse: primary weapon.
+- Mouse: steer and tilt the vehicle using the original keymap coefficients.
+- W/S: forward and reverse; A/D: strafe; Q/E: turn (Shift for full keyboard turn).
+- Space: jump jets; mouse wheel: adjust hover strength; left mouse: primary weapon.
+- Right mouse or 1: Tank pulse / Scout repair; 2: Tank piercer; R: Scout repair.
 - F2: first/third-person camera; F12: screenshot.
-- Deployment button or Escape: open the team/deployment panel.
+- F1, Escape or Deployment: open the team/deployment panel and release the mouse.
+- F1 or Resume: return to captured mouse control. Losing focus opens the menu
+  and releases weapons while retaining hover strength and vehicle tilt.
 - Disconnect returns to the connection screen without restarting.
 
 Screenshots go in Godot's application user-data `screenshots` folder. The native
@@ -65,23 +69,37 @@ godot_console.exe --headless --path client/modern -- --online-smoke
 Crimson, deploys, moves and disconnects. It stops after at most 35 seconds. Do not
 use it as a soak or as evidence of physical rendering/input. `--connect` starts
 the normal UI already connected as ModernPilot; `--server=HOST` overrides its
-server. `--fullscreen`, `--capture-start`, and `--capture-dir=PATH` support local
+server; `--port=PORT` overrides its port. For loopback-only tests the player code
+can come from `WULFRAM_TEST_JOIN_CODE`; internet hosts ignore that override.
+`--fullscreen`, `--capture-start`, and `--capture-dir=PATH` support local
 display qualification without desktop screenshot tools.
+
+`scripts/check-modern-session.py` runs a bounded native Tank/Scout combat journey
+alongside a legacy protocol probe and 64 bots on a private loopback server. It
+requires the API 14 native Python binding and original server content. It checks
+fine aiming, actual pulse/piercer creation, movement, repair input, reliable command
+acknowledgement and disconnect cleanup. `check_input.gd` sends window-coordinate
+events through Godot's real GUI route; a GPU run also checks tactical-map selection.
+Neither harness substitutes for physical mouse/DPI and human combat qualification.
 
 ## Current scope and gaps
 
 Implemented: direct native session/bootstrap, current server quantizer validation,
 world snapshots, team acknowledgement, Tank/Scout deployment, server-driven
-poses/vitals, primary-weapon input, two cameras, cockpit radar/map, bounded
+poses/vitals/weapon charge, mouse aiming, supported weapon inputs, two cameras, cockpit radar/map, bounded
 deployment retries, reconnect UI and screenshots. Terrain comes from the same
 grids used by the server. New UI uses Godot's layout/input transforms.
+Vehicle and camera rotation use the same Euler convention as the authoritative
+combat ray. The server negotiates a precise action table with this client; retail
+clients and the first native preview retain the historical table. This client
+also accepts that older table when connecting to an older revival server.
 
 The maintainer requires the original models and textures to look exactly like
 the original. The loader preserves those assets, while full appearance parity
 is still under qualification. Terrain uses original tile bitmaps and the original
 bank-1 dither masks; the old renderer's variant/priority selection and exact
 lighting/effect/UI presentation still need side-by-side comparison. Sound,
-mouse aiming, complete weapon/equipment interfaces,
+physical aiming/handling approval, complete weapon/equipment interfaces,
 prediction/reconciliation, full loss/reordering/map/death tests, accessibility,
 GPU/DPI coverage and human playtests are not qualified. No claim of production
 readiness, pixel-identical terrain composition or complete combat presentation is made. Do not replace the main

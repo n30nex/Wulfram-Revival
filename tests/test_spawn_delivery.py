@@ -166,12 +166,12 @@ class SpawnDeliveryTests(unittest.TestCase):
         old = self.session.entity
         read_value = app._read_action_value
         replacement_pending = []
-        def replace_during_decode(reader, channel):
+        def replace_during_decode(reader, channel, precise=False):
             self.session.entity = self.server.entities.create_entity(0, 1, (100, 0, 15))
             with patch.object(app.time, 'monotonic', return_value=101):
                 app._send_spawn_tank(self.ctx)
             replacement_pending.append(self.session.spawn_delivery)
-            return read_value(reader, channel)
+            return read_value(reader, channel, precise)
         with patch.object(app, '_read_action_value', side_effect=replace_during_decode):
             app.dispatcher.dispatch_datagram(self.ctx, action_packet(0x0A))
         self.assertIsNot(self.session.entity, old)

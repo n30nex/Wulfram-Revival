@@ -123,13 +123,18 @@ the exact candidate.
 
 - [#16: Choose the replacement-client architecture through a bounded spike](https://github.com/n30nex/Wulfram-Revival/issues/16).
 - [#17: Build a networked replacement-client gameplay slice](https://github.com/n30nex/Wulfram-Revival/issues/17).
-- [#18: Redraw the familiar cockpit and improve the classic sci-fi presentation](https://github.com/n30nex/Wulfram-Revival/issues/18).
+- [#18: Preserve original assets and adapt the familiar HUD for modern displays](https://github.com/n30nex/Wulfram-Revival/issues/18).
 - [#19: Qualify the replacement-client alpha and its transition path](https://github.com/n30nex/Wulfram-Revival/issues/19).
 
 The initial implementation uses Godot 4.7.2, native TCP/UDP and the existing
 server's authoritative physics. See [the native client](client/modern/README.md)
 for the bounded prototype, build recipe and limitations. The first live checks
 connect, select a team, deploy and move without the preserved executable.
+The next slice adds mouse steering/tilt, matching camera rotation, weapon charge
+and pulse/piercer/repair input. A bounded private match verifies fine aim and
+actual projectiles with 64 bots plus a simultaneous legacy connection. GPU GUI
+event checks cover login/team/map targets from 800x600 through a requested 4K
+window size; physical mouse/DPI and human handling approval remain open.
 The native asset loader reads the original visual meshes and texture archives;
 terrain composition, original effect/UI coverage and visual comparison remain
 required. Approximate development geometry is not acceptable final content.

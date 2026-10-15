@@ -81,7 +81,7 @@ class TransientArrayPacket(Packet):
         # ProcessTransientArrayPacket (0x0046CA60) interpolates halfway from
         # the configured base to maximum precision using the executable's 0.5
         # constant, then CVTTSD2SI truncates the result. With the current
-        # translation packet this is eight bits per component. Crucially, no
+        # translation packet this is fourteen bits per component. Crucially, no
         # per-vector or per-component precision header appears on the wire.
         position_bits = int(
             position_config.precision_base_bits
