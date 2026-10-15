@@ -52,7 +52,7 @@ $log | Write-Output
 if($LASTEXITCODE -ne 0 -or ($log -join "`n") -match '(SCRIPT ERROR:|ERROR:)') { throw 'Modern-client export failed.' }
 $revision = git -C $repo rev-parse HEAD
 $dirty = [bool](git -C $repo status --porcelain)
-$manifest = [ordered]@{schema=1; version='0.1.7-dev'; source=$revision; dirty=$dirty; engine='4.7.2-stable'; channel='development-preview'; files=@()}
+$manifest = [ordered]@{schema=1; version='0.1.8-dev'; source=$revision; dirty=$dirty; engine='4.7.2-stable'; channel='development-preview'; files=@()}
 foreach($name in @('WulframRevival.exe','WulframRevival.pck')) {
     $path = Join-Path $output $name
     $manifest.files += @{name=$name;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant();bytes=(Get-Item -LiteralPath $path).Length}
@@ -62,6 +62,7 @@ Copy-Item -LiteralPath (Join-Path $project 'README.md') -Destination (Join-Path 
 Copy-Item -LiteralPath (Join-Path $project 'ORIGINAL_FORMATS.md') -Destination (Join-Path $output 'ORIGINAL_FORMATS.md')
 Copy-Item -LiteralPath (Join-Path $project 'COMBAT_AUDIO.md') -Destination (Join-Path $output 'COMBAT_AUDIO.md')
 Copy-Item -LiteralPath (Join-Path $project 'NATIVE_NETWORK.md') -Destination (Join-Path $output 'NATIVE_NETWORK.md')
+Copy-Item -LiteralPath (Join-Path $project 'CARGO.md') -Destination (Join-Path $output 'CARGO.md')
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $output 'LICENSE')
 Copy-Item -LiteralPath (Join-Path $repo 'NOTICE') -Destination (Join-Path $output 'NOTICE')
 Write-Output "MODERN_CLIENT_EXPORT=$output"

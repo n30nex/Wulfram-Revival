@@ -280,7 +280,7 @@ func model(name: String) -> Dictionary:
 
 static func model_name(unit: int, team: int) -> String:
 	var suffix := "_2" if team == 1 else "_1"
-	var paired := {0: "tank", 1: "scout", 25: "energy", 26: "refuel", 27: "repair", 29: "flak_turret", 30: "gun_turret", 35: "darklight"}
+	var paired := {0: "tank", 1: "scout", 25: "energy", 26: "refuel", 27: "repair", 29: "flak_turret", 30: "gun_turret", 32: "missile_launcher", 33: "skypump", 35: "darklight"}
 	if paired.has(unit):
 		return paired[unit] + suffix
 	return {5: "flak_shell", 6: "pulse_shell", 19: "cargo", 20: "uplinkred" if team == 1 else "uplinkblue"}.get(unit, "")

@@ -18,8 +18,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'server'))
 from wulfram_server import application as app
 from wulfram_server.core.config import Config
+from wulfram_server.core.entity import UpdateMask
 from wulfram_server.hooks import ProductionHooks
 from wulfram_server.network.packets.packet_config import PacketConfig
+from wulfram_server.network.packets.gameplay import DeleteObjectPacket
 
 
 class TestHooks(ProductionHooks):
@@ -42,12 +44,63 @@ class TestHooks(ProductionHooks):
                 self.precise_values.append(value)
 
 
+class CargoHooks(TestHooks):
+    """Place original crates in contact; let native physics perform pickup."""
+    stages = (('drop', 2, 1), ('deploy', 5, 1), ('locked_drop', 1, 2))
+
+    def __init__(self, cfg, environment):
+        super().__init__(cfg, environment)
+        self.cargo_results = []
+        self.crate = None
+        self.picked_up = False
+        self.before_ids = set()
+        self.next_at = 0.0
+
+    def before_game_loop_iteration(self, server):
+        super().before_game_loop_iteration(server)
+        if len(self.cargo_results) == len(self.stages) or time.monotonic() < self.next_at:
+            return
+        session = next((s for s in server.sessions if s.name == 'ModernCargoCheck'), None)
+        if session is None or session.entity is None:
+            return
+        mode, item, team = self.stages[len(self.cargo_results)]
+        if self.crate is None:
+            x, y, z = session.entity.pos
+            self.crate = server.entities.create_entity(19, team, (x+2, y, z))
+            self.crate.cargo_item_id = item
+            self.crate.mark_dirty(UpdateMask.DEFINITION | UpdateMask.ROT | UpdateMask.HARD_SYNC)
+            self.before_ids = {e.net_id for e in server.entities.get_all()}
+            self.picked_up = False
+        elif not self.picked_up:
+            self.picked_up = (session.carried_cargo_item_id == item
+                              and session.carried_cargo_team_id == team
+                              and server.entities.get_entity(self.crate.net_id) is None)
+        elif session.carried_cargo_item_id is None:
+            unit = 25+item if mode == 'deploy' else 19
+            created = [e for e in server.entities.get_all()
+                       if e.net_id not in self.before_ids and e.unit_type == unit
+                       and e.score_owner_id == session.player_id]
+            valid = len(created) == 1 and created[0].team_id == team
+            if mode != 'deploy':
+                valid &= len(created) == 1 and created[0].cargo_item_id == item
+            self.cargo_results.append({'mode': mode, 'item': item, 'team': team,
+                                      'native_contact_pickup': self.picked_up,
+                                      'created': [e.net_id for e in created], 'unit': unit, 'passed': valid})
+            # The private fixture has been observed. Remove it before seeding
+            # the next case so it cannot be picked up again accidentally.
+            for entity in created:
+                server.entities.remove_entity(entity.net_id)
+                app.broadcast(server, DeleteObjectPacket(entity.net_id, explosion=False))
+            self.crate = None
+            self.next_at = time.monotonic()+.3
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--godot', type=Path, required=True)
     parser.add_argument('--content-root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--journey', choices=('combat', 'communications', 'capacity'), default='combat')
+    parser.add_argument('--journey', choices=('combat', 'communications', 'capacity', 'cargo'), default='combat')
     args = parser.parse_args()
     log_path = args.output.with_suffix('.log')
     if any(p.exists() for p in (args.output, log_path)):
@@ -67,7 +120,7 @@ def main():
             game=replace(cfg.game, map_name='crossroads', map_rotation=('crossroads',), bots_per_team=32, player_limit=80),
             network=replace(cfg.network, host='127.0.0.1', server_ip='127.0.0.1', tcp_port=port, udp_port=port),
             runtime=replace(cfg.runtime, state_directory=Path(temporary)/'state', log_directory=Path(temporary)/'logs'))
-        hooks = TestHooks(cfg, {'WULFRAM_SERVER_PASSWORD': 'private-client-test',
+        hooks = (CargoHooks if args.journey == 'cargo' else TestHooks)(cfg, {'WULFRAM_SERVER_PASSWORD': 'private-client-test',
                                 'WULFRAM_SERVER_ADMIN_PASSWORD': 'private-unused-admin'})
         server = app.WulframServerContext(cfg, PacketConfig.load(str(args.content_root/'packets.toml'), strict=True),
                                          content_root=args.content_root, hooks=hooks)
@@ -75,7 +128,8 @@ def main():
         environment = dict(os.environ, WULFRAM_TEST_PORT=str(port), WULFRAM_TEST_JOIN_CODE='private-client-test',
                            WULFRAM_PROBE_PASSWORD='private-client-test')
         def modern():
-            script = {'communications': 'check_comms_session.gd', 'capacity': 'check_capacity.gd'}.get(args.journey, 'check_session.gd')
+            script = {'communications': 'check_comms_session.gd', 'capacity': 'check_capacity.gd',
+                      'cargo': 'check_cargo_session.gd'}.get(args.journey, 'check_session.gd')
             run = subprocess.run([str(args.godot.resolve()), '--headless', '--path', str(ROOT/'client/modern'),
                                   '--script', 'res://'+script], env=environment,
                                  capture_output=True, text=True, timeout=40)
@@ -138,6 +192,9 @@ def main():
                     and projectile_ids <= set(report['modern'].get('projectile_event_ids', [])))
             elif args.journey == 'capacity':
                 report['passed'] &= report['peak_sessions'] == 80 and report['peak_human_vehicles'] == 16
+            elif args.journey == 'cargo':
+                report['cargo_results'] = hooks.cargo_results
+                report['passed'] &= len(hooks.cargo_results) == 3 and all(r['passed'] for r in hooks.cargo_results)
         finally:
             server.shutdown()
             worker.join(timeout=5)

@@ -120,6 +120,32 @@ class LoadoutTests(unittest.TestCase):
         self.assertEqual(tank.carried_cargo_team_id, 1)
         self.assertEqual(tank.carried_cargo_item_id, 5)
 
+    def test_enemy_cargo_cannot_be_deployed_but_can_be_dropped(self):
+        server = make_server()
+        tank = server.bots.add(team=1, loadout="tank")
+        cargo = server.entities.create_entity(19, 2, (100, 0, 15))
+        cargo.cargo_item_id = 5
+        self.assertTrue(app._pickup_cargo(server, tank, cargo))
+        before = {e.net_id for e in server.entities.get_all()}
+        self.assertIsNone(app._handle_cargo_request(server, tank, deploy=True))
+        self.assertEqual(before, {e.net_id for e in server.entities.get_all()})
+        self.assertEqual((tank.carried_cargo_item_id, tank.carried_cargo_team_id), (5, 2))
+        dropped = app._handle_cargo_request(server, tank, deploy=False)
+        self.assertEqual((dropped.unit_type, dropped.cargo_item_id, dropped.team_id), (19, 5, 2))
+        self.assertIsNone(tank.carried_cargo_item_id)
+        self.assertIsNone(app._handle_cargo_request(server, tank, deploy=False))
+
+    def test_friendly_cargo_deploys_once_with_the_original_item_mapping(self):
+        server = make_server()
+        tank = server.bots.add(team=1, loadout="tank")
+        cargo = server.entities.create_entity(19, 1, (100, 0, 15))
+        cargo.cargo_item_id = 2
+        self.assertTrue(app._pickup_cargo(server, tank, cargo))
+        built = app._handle_cargo_request(server, tank, deploy=True)
+        self.assertEqual((built.unit_type, built.team_id, built.score_owner_id), (27, 1, tank.player_id))
+        self.assertEqual(built.pos, tank.entity.pos)
+        self.assertIsNone(app._handle_cargo_request(server, tank, deploy=True))
+
 
 if __name__ == "__main__":
     unittest.main()
