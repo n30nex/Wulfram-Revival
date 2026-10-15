@@ -6,7 +6,7 @@ out of scope for the first release; the Pi server runs on Linux.
 
 ## Native lifecycle and full-capacity increment, October 15, 2026
 
-The 0.1.7 candidate and server alpha2.9 add opt-in reliable lifecycle transitions
+The published 0.1.7 preview and live server alpha2.9 add opt-in reliable lifecycle transitions
 and connection/map/vehicle binding. The previous client was reproduced stuck on
 a dead vehicle after one UDP deletion was dropped: it remained attached to
 entity 73 for the full 18-second check. The new path clears that vehicle and
@@ -41,6 +41,46 @@ owner vitals, retry identity, acknowledgements and sequence wraparound. See
 [protocol and test details](client/modern/NATIVE_NETWORK.md). Complete client
 systems, broader network/performance coverage, visual/physical and human approval
 remain open; this is not production certification.
+
+Exact source `f137d5c72c762f0e85c16a43858b756b9cb28043` from
+[PR #45](https://github.com/n30nex/Wulfram-Revival/pull/45) passed all ten push/PR
+checks. The clean Windows export comes from
+[Actions 38802742063](https://github.com/n30nex/Wulfram-Revival/actions/runs/38802742063);
+the ARM64 artifact comes from
+[Actions 38802742103](https://github.com/n30nex/Wulfram-Revival/actions/runs/38802742103).
+
+- [Windows preview 0.1.7](https://canadaverse.org/downloads/wulfram/Wulfram-Revival-Modern-0.1.7-dev-f137d5c.zip):
+  53,239,201 bytes; SHA-256 `50d34fa823d281ac9f1689d0cd86af476d3e2d7d311dcf1d149f5a9b9cb7de81`.
+  The complete public HTTP 200 download, checksum and source manifest matched
+  at 20:46 UTC on October 15.
+- EXE SHA-256 `d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562`;
+  PCK SHA-256 `2248c1f4943f68183ebb737209f0c5861dde1456353cff91baf14eee7658175a`.
+- All 164 original media entries in the ZIP match the preserved source files
+  or exact final archive members byte-for-byte. This preserves the original
+  artwork; it does not certify rendering, lighting or full visual equivalence.
+- The exact exported client rendered the live Crossroads match with native
+  lifecycle negotiation required. It moved 87.70 world units, received 249
+  snapshots, 34 accepted shots and 66 feedback events without malformed data
+  or asset errors, then disconnected. The compiled PCK also passed the GPU GUI
+  harness under the pinned debug engine, with assertions enabled: five window
+  sizes, channel popup/focus, typing, scrolling and 80 roster rows. Physical
+  mouse, DPI and monitor qualification remain separate.
+- Server **0.4.0-alpha2.9** runs the same source on `neopi5`, with 64 bots,
+  16 human places and zero automatic restarts at 20:45 UTC. All 133 Python tests
+  and the exact ARM native binding suite pass on the Pi. Native API 14 artifact
+  SHA-256 remains `584420a49559e1e7365bf27759d5a504aca38c338cb3b0b19100b98b540e0cd0`;
+  content identity remains `edd715d34b3d536828e5b0351fe88a3802ea3f485baaafe92964e7a46a50ac6f`.
+  The sealed release has 150 verified files; service configuration is unchanged.
+- A separate outside-network legacy journey passed in 20.60 seconds: public
+  TCP/UDP login, full-health Tank deployment/movement, team switch, actual Scout
+  deployment and clean disconnect. These bounded checks do not establish Pi
+  full-capacity performance or sustained uptime.
+- Verified server rollback is
+  `/opt/canadaverse/wulfram/backups/20261015-alpha29-f137d5c/rollback.py`, restoring
+  sealed alpha2.8 source `0840133e3807617c085112df54763c703b95b32c`.
+  Removing this preview's ZIP, checksum and `modern-preview-f137d5c.json` rolls
+  back its publication. Prior downloads and the preserved-client default remain
+  available; the preview manifest retains `production_approved: false`.
 
 ## Native communications and roster increment, October 15, 2026
 
